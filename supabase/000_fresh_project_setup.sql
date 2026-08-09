@@ -1,17 +1,17 @@
 -- ============================================================================
---  CALCIO AC — FRESH PROJECT SETUP
+--  CALCIO AC — FRESH PROJECT SETUP (single-club)
 --  ----------------------------------------------------------------------------
 --  Run this ONCE, top to bottom, in a brand-new Supabase project's SQL Editor.
---  It consolidates every migration under supabase/*.sql into the current,
---  final-state schema (the same shape already running in production), plus:
---    - a public "anon" read layer so the two public report sites can read
---      MKS Podlasie's data without a login
---    - seed rows for the one MKS Podlasie academy + team
+--  This is a single-club schema: there is no academy/multi-tenant layer —
+--  every authenticated user (super_admin or analyst) works on the same one
+--  club's data. `role` still distinguishes you (super_admin: full control,
+--  including destructive/admin actions and account management) from your
+--  analysts (full read/write on match data, no admin actions).
 --
 --  After running this file:
 --    1. Create your own login: Dashboard → Authentication → Add User.
 --    2. Run the `insert` statement at the very bottom of this file
---       (Section 8) to make yourself super_admin.
+--       (Section 7) to make yourself super_admin.
 --    3. Log into CAC-input with that account → Admin Portal → Analysts tab
 --       to create accounts for the other analysts (this app creates their
 --       `profiles` row automatically, you don't need to touch SQL for them).
@@ -24,8 +24,7 @@
 
 -- ============================================================================
 -- SECTION 0 — CLEAN SLATE
--- Makes this script safely re-runnable on a project where a previous,
--- partial run failed partway through (safe here since this is a brand-new
+-- Makes this script safely re-runnable (safe here since this is a brand-new
 -- project with no real data yet).
 -- ============================================================================
 
@@ -56,20 +55,19 @@ drop function if exists public.release_match_lock(uuid, uuid) cascade;
 
 -- ============================================================================
 -- SECTION 1 — BASE SCHEMA
--- Tables created in FK-safe order (referenced tables first).
+-- Tables created in FK-safe order (referenced tables first). No academies /
+-- tournament_academies tables, no academy_id column anywhere.
 -- ============================================================================
 
 create extension if not exists pgcrypto;
 
-create table public.academies (
-  academy_id uuid not null default gen_random_uuid(),
-  name text not null,
-  slug text not null unique,
-  logo_url text,
+create table public.profiles (
+  id uuid not null,
+  username text unique,
+  role text default 'analyst'::text check (role = any (array['super_admin'::text, 'analyst'::text])),
   created_at timestamp with time zone default now(),
-  created_by uuid,
-  constraint academies_pkey primary key (academy_id),
-  constraint academies_created_by_fkey foreign key (created_by) references auth.users(id)
+  constraint profiles_pkey primary key (id),
+  constraint profiles_id_fkey foreign key (id) references auth.users(id)
 );
 
 create table public.tournaments (
@@ -80,25 +78,8 @@ create table public.tournaments (
   end_date date,
   created_at timestamp with time zone default now(),
   created_by uuid,
-  -- Not in the original pasted schema dump, but required by the
-  -- tournaments_select/insert/update RLS policies below (which reference
-  -- academy_id) — production has this column even though no migration file
-  -- in this repo shows it being added, so it's included here explicitly.
-  academy_id uuid,
   constraint tournaments_pkey primary key (tournament_id),
-  constraint tournaments_created_by_fkey foreign key (created_by) references auth.users(id),
-  constraint tournaments_academy_id_fkey foreign key (academy_id) references public.academies(academy_id)
-);
-
-create table public.profiles (
-  id uuid not null,
-  username text unique,
-  role text default 'analyst'::text check (role = any (array['super_admin'::text, 'analyst'::text])),
-  created_at timestamp with time zone default now(),
-  academy_id uuid,
-  constraint profiles_pkey primary key (id),
-  constraint profiles_id_fkey foreign key (id) references auth.users(id),
-  constraint profiles_academy_id_fkey foreign key (academy_id) references public.academies(academy_id)
+  constraint tournaments_created_by_fkey foreign key (created_by) references auth.users(id)
 );
 
 create table public.teams (
@@ -107,10 +88,8 @@ create table public.teams (
   is_home boolean default false,
   created_by uuid,
   created_at timestamp with time zone default now(),
-  academy_id uuid,
   constraint teams_pkey primary key (team_id),
-  constraint teams_created_by_fkey foreign key (created_by) references public.profiles(id),
-  constraint teams_academy_id_fkey foreign key (academy_id) references public.academies(academy_id)
+  constraint teams_created_by_fkey foreign key (created_by) references public.profiles(id)
 );
 
 create table public.players (
@@ -143,7 +122,6 @@ create table public.matches (
   locked_at timestamp with time zone,
   assigned_to uuid,
   tournament_id uuid,
-  academy_id uuid,
   home_team_score bigint,
   away_team_score bigint,
   constraint matches_pkey primary key (match_id),
@@ -152,17 +130,7 @@ create table public.matches (
   constraint matches_created_by_fkey foreign key (created_by) references public.profiles(id),
   constraint matches_locked_by_fkey foreign key (locked_by) references auth.users(id),
   constraint matches_assigned_to_fkey foreign key (assigned_to) references auth.users(id),
-  constraint matches_tournament_id_fkey foreign key (tournament_id) references public.tournaments(tournament_id),
-  constraint matches_academy_id_fkey foreign key (academy_id) references public.academies(academy_id)
-);
-
-create table public.tournament_academies (
-  tournament_id uuid not null,
-  academy_id uuid not null,
-  added_at timestamp with time zone default now(),
-  constraint tournament_academies_pkey primary key (tournament_id, academy_id),
-  constraint tournament_academies_tournament_id_fkey foreign key (tournament_id) references public.tournaments(tournament_id),
-  constraint tournament_academies_academy_id_fkey foreign key (academy_id) references public.academies(academy_id)
+  constraint matches_tournament_id_fkey foreign key (tournament_id) references public.tournaments(tournament_id)
 );
 
 create table public.lineups (
@@ -275,7 +243,7 @@ create table public.match_notes (
 );
 
 create table public.action_flow_rules (
-  -- BY DEFAULT (not ALWAYS) — the Section 5 seed below inserts explicit
+  -- BY DEFAULT (not ALWAYS) — the Section 4 seed below inserts explicit
   -- ids (1-100) to preserve the existing rule numbering; ALWAYS would
   -- reject that without an OVERRIDING SYSTEM VALUE clause on every insert.
   id integer generated by default as identity primary key,
@@ -295,7 +263,7 @@ create index if not exists idx_flow_rules_lookup on public.action_flow_rules(cur
 
 
 -- ============================================================================
--- SECTION 2 — RLS HELPER FUNCTIONS + AUTO-STAMP TRIGGER
+-- SECTION 2 — RLS HELPER FUNCTION
 -- ============================================================================
 
 create or replace function public.is_super_admin()
@@ -306,39 +274,19 @@ returns boolean language sql stable security definer as $$
   );
 $$;
 
-create or replace function public.current_academy_id()
-returns uuid language sql stable security definer as $$
-  select academy_id from public.profiles where id = auth.uid();
-$$;
-
--- Auto-stamp a new match with its creator's academy if not explicitly set.
-create or replace function public.matches_set_academy_id()
-returns trigger language plpgsql security definer as $$
-begin
-  if new.academy_id is null then
-    select academy_id into new.academy_id
-      from public.profiles
-     where id = new.created_by;
-  end if;
-  return new;
-end$$;
-
-create trigger trg_matches_set_academy_id
-  before insert on public.matches
-  for each row execute function public.matches_set_academy_id();
-
 
 -- ============================================================================
 -- SECTION 3 — ROW LEVEL SECURITY (internal / authenticated app users)
--- super_admin sees everything; analyst sees only their own academy's data.
+-- Single-club: any authenticated user (super_admin or analyst) can read and
+-- tag match data. super_admin-only for destructive actions (delete, merge)
+-- and admin management (creating other users' profiles, editing action-flow
+-- rules, deleting teams/players/tournaments).
 -- ============================================================================
 
-alter table public.academies              enable row level security;
 alter table public.profiles               enable row level security;
 alter table public.teams                  enable row level security;
 alter table public.players                enable row level security;
 alter table public.tournaments            enable row level security;
-alter table public.tournament_academies   enable row level security;
 alter table public.matches                enable row level security;
 alter table public.match_events           enable row level security;
 alter table public.processed_match_events enable row level security;
@@ -347,19 +295,12 @@ alter table public.match_assignments      enable row level security;
 alter table public.match_notes            enable row level security;
 alter table public.action_flow_rules      enable row level security;
 
--- ── ACADEMIES ───────────────────────────────────────────────────────────────
-create policy academies_select on public.academies for select
-  using (is_super_admin() or academy_id = current_academy_id());
-create policy academies_insert on public.academies for insert
-  with check (is_super_admin());
-create policy academies_update on public.academies for update
-  using (is_super_admin()) with check (is_super_admin());
-create policy academies_delete on public.academies for delete
-  using (is_super_admin());
-
 -- ── PROFILES ────────────────────────────────────────────────────────────────
+-- Everyone on the team can see each other (small squad, needed for
+-- assignment dropdowns / leaderboards); only super_admin creates/deletes
+-- accounts; anyone can update their own profile.
 create policy profiles_select on public.profiles for select
-  using (is_super_admin() or id = auth.uid() or academy_id = current_academy_id());
+  using (auth.uid() is not null);
 create policy profiles_insert on public.profiles for insert
   with check (is_super_admin() or id = auth.uid());
 create policy profiles_update on public.profiles for update
@@ -370,34 +311,27 @@ create policy profiles_delete on public.profiles for delete
 
 -- ── TEAMS ───────────────────────────────────────────────────────────────────
 create policy teams_select on public.teams for select
-  using (is_super_admin() or academy_id = current_academy_id() or academy_id is null);
+  using (auth.uid() is not null);
 create policy teams_insert on public.teams for insert
-  with check (is_super_admin() or academy_id = current_academy_id() or academy_id is null);
+  with check (auth.uid() is not null);
 create policy teams_update on public.teams for update
-  using (is_super_admin() or academy_id = current_academy_id() or academy_id is null)
-  with check (is_super_admin() or academy_id = current_academy_id() or academy_id is null);
+  using (auth.uid() is not null) with check (auth.uid() is not null);
 create policy teams_delete on public.teams for delete
-  using (is_super_admin() or academy_id = current_academy_id());
+  using (is_super_admin());
 
 -- ── PLAYERS ─────────────────────────────────────────────────────────────────
 create policy players_select on public.players for select
-  using (is_super_admin() or exists (
-    select 1 from public.teams t where t.team_id = players.team_id
-      and (t.academy_id = current_academy_id() or t.academy_id is null)));
+  using (auth.uid() is not null);
 create policy players_insert on public.players for insert
-  with check (is_super_admin() or exists (
-    select 1 from public.teams t where t.team_id = players.team_id
-      and (t.academy_id = current_academy_id() or t.academy_id is null)));
+  with check (auth.uid() is not null);
 create policy players_update on public.players for update
-  using (is_super_admin() or exists (
-    select 1 from public.teams t where t.team_id = players.team_id
-      and (t.academy_id = current_academy_id() or t.academy_id is null)));
+  using (auth.uid() is not null);
 create policy players_delete on public.players for delete
   using (is_super_admin());
 
 -- ── TOURNAMENTS ─────────────────────────────────────────────────────────────
 create policy tournaments_select on public.tournaments for select
-  using (is_super_admin() or academy_id = current_academy_id() or academy_id is null);
+  using (auth.uid() is not null);
 create policy tournaments_insert on public.tournaments for insert
   with check (is_super_admin());
 create policy tournaments_update on public.tournaments for update
@@ -405,85 +339,62 @@ create policy tournaments_update on public.tournaments for update
 create policy tournaments_delete on public.tournaments for delete
   using (is_super_admin());
 
-create policy tournament_academies_select on public.tournament_academies for select
-  using (is_super_admin() or academy_id = current_academy_id());
-create policy tournament_academies_write on public.tournament_academies for all
-  using (is_super_admin()) with check (is_super_admin());
-
 -- ── MATCHES ─────────────────────────────────────────────────────────────────
 create policy matches_select on public.matches for select
-  using (is_super_admin() or academy_id = current_academy_id());
+  using (auth.uid() is not null);
 create policy matches_insert on public.matches for insert
-  with check (is_super_admin() or (created_by = auth.uid() and current_academy_id() is not null));
+  with check (auth.uid() is not null);
 create policy matches_update on public.matches for update
-  using (is_super_admin() or academy_id = current_academy_id())
-  with check (is_super_admin() or academy_id = current_academy_id());
+  using (auth.uid() is not null) with check (auth.uid() is not null);
 create policy matches_delete on public.matches for delete
-  using (is_super_admin() or academy_id = current_academy_id());
+  using (is_super_admin());
 
 -- ── MATCH_EVENTS ────────────────────────────────────────────────────────────
 create policy match_events_select on public.match_events for select
-  using (is_super_admin() or exists (select 1 from public.matches m
-    where m.match_id = match_events.match_id and m.academy_id = current_academy_id()));
+  using (auth.uid() is not null);
 create policy match_events_insert on public.match_events for insert
-  with check (is_super_admin() or exists (select 1 from public.matches m
-    where m.match_id = match_events.match_id and m.academy_id = current_academy_id()));
+  with check (auth.uid() is not null);
 create policy match_events_update on public.match_events for update
-  using (is_super_admin() or exists (select 1 from public.matches m
-    where m.match_id = match_events.match_id and m.academy_id = current_academy_id()));
+  using (auth.uid() is not null);
 create policy match_events_delete on public.match_events for delete
-  using (is_super_admin() or exists (select 1 from public.matches m
-    where m.match_id = match_events.match_id and m.academy_id = current_academy_id()));
+  using (auth.uid() is not null);
 
 -- ── PROCESSED_MATCH_EVENTS ──────────────────────────────────────────────────
 create policy pme_select on public.processed_match_events for select
-  using (is_super_admin() or exists (select 1 from public.matches m
-    where m.match_id = processed_match_events.match_id and m.academy_id = current_academy_id()));
+  using (auth.uid() is not null);
 create policy pme_insert on public.processed_match_events for insert
-  with check (is_super_admin() or exists (select 1 from public.matches m
-    where m.match_id = processed_match_events.match_id and m.academy_id = current_academy_id()));
+  with check (auth.uid() is not null);
 create policy pme_update on public.processed_match_events for update
-  using (is_super_admin() or exists (select 1 from public.matches m
-    where m.match_id = processed_match_events.match_id and m.academy_id = current_academy_id()));
+  using (auth.uid() is not null);
 create policy pme_delete on public.processed_match_events for delete
-  using (is_super_admin() or exists (select 1 from public.matches m
-    where m.match_id = processed_match_events.match_id and m.academy_id = current_academy_id()));
+  using (auth.uid() is not null);
 
 -- ── LINEUPS ─────────────────────────────────────────────────────────────────
 create policy lineups_select on public.lineups for select
-  using (is_super_admin() or exists (select 1 from public.matches m
-    where m.match_id = lineups.match_id and m.academy_id = current_academy_id()));
+  using (auth.uid() is not null);
 create policy lineups_insert on public.lineups for insert
-  with check (is_super_admin() or exists (select 1 from public.matches m
-    where m.match_id = lineups.match_id and m.academy_id = current_academy_id()));
+  with check (auth.uid() is not null);
 create policy lineups_update on public.lineups for update
-  using (is_super_admin() or exists (select 1 from public.matches m
-    where m.match_id = lineups.match_id and m.academy_id = current_academy_id()));
+  using (auth.uid() is not null);
 create policy lineups_delete on public.lineups for delete
-  using (is_super_admin() or exists (select 1 from public.matches m
-    where m.match_id = lineups.match_id and m.academy_id = current_academy_id()));
+  using (auth.uid() is not null);
 
 -- ── MATCH_ASSIGNMENTS ───────────────────────────────────────────────────────
 create policy ma_select on public.match_assignments for select
-  using (is_super_admin() or user_id = auth.uid() or exists (select 1 from public.matches m
-    where m.match_id = match_assignments.match_id and m.academy_id = current_academy_id()));
+  using (auth.uid() is not null);
 create policy ma_insert on public.match_assignments for insert
-  with check (is_super_admin() or exists (select 1 from public.matches m
-    where m.match_id = match_assignments.match_id and m.academy_id = current_academy_id()));
+  with check (is_super_admin() or exists (
+    select 1 from public.matches m where m.match_id = match_assignments.match_id and m.created_by = auth.uid()));
 create policy ma_delete on public.match_assignments for delete
-  using (is_super_admin() or exists (select 1 from public.matches m
-    where m.match_id = match_assignments.match_id and m.academy_id = current_academy_id()));
+  using (is_super_admin() or exists (
+    select 1 from public.matches m where m.match_id = match_assignments.match_id and m.created_by = auth.uid()));
 
 -- ── MATCH_NOTES ─────────────────────────────────────────────────────────────
--- Internal scouting notes — analysts within the academy only, not public.
+-- Internal scouting notes — any team member, not public.
 create policy match_notes_select on public.match_notes for select
-  using (is_super_admin() or exists (select 1 from public.matches m
-    where m.match_id = match_notes.match_id and m.academy_id = current_academy_id()));
+  using (auth.uid() is not null);
 create policy match_notes_write on public.match_notes for all
-  using (is_super_admin() or exists (select 1 from public.matches m
-    where m.match_id = match_notes.match_id and m.academy_id = current_academy_id()))
-  with check (is_super_admin() or exists (select 1 from public.matches m
-    where m.match_id = match_notes.match_id and m.academy_id = current_academy_id()));
+  using (auth.uid() is not null) with check (auth.uid() is not null);
 
 -- ── ACTION_FLOW_RULES ───────────────────────────────────────────────────────
 -- Global table — every analyst reads, only super_admin writes.
@@ -572,7 +483,9 @@ end$$;
 -- This is the exact, currently-tuned production rule set (not the generic
 -- migration defaults) — carried over because it's system configuration for
 -- the tagging workflow, not match data, and has already been refined via the
--- Admin Portal's rule editor.
+-- Admin Portal's rule editor. `updated_by` is nulled out — those UUIDs
+-- referenced a staff member's auth.users id from the old project, which
+-- doesn't exist here.
 -- ============================================================================
 
 INSERT INTO "public"."action_flow_rules" ("id", "current_action", "current_outcome", "current_type", "next_action", "next_outcome", "next_type", "next_action_player", "next_reaction_player", "updated_at", "updated_by") VALUES
@@ -687,51 +600,33 @@ select setval(
 
 
 -- ============================================================================
--- SECTION 6 — SEED: the one MKS Podlasie academy + team
--- One statement, chained via a CTE so there's no manual copy-paste of the
--- academy_id between statements. Copy BOTH returned UUIDs from the result —
--- academy_id is VITE_ACADEMY_ID (CAC-player-report), team_id is
--- NEXT_PUBLIC_MKS_TEAM_ID (CAC-Match-Report).
+-- SECTION 6 — SEED: the MKS Podlasie team
+-- Single-club schema — no academy wrapper needed. Copy the returned
+-- team_id: it's VITE_TEAM_ID for CAC-player-report and
+-- NEXT_PUBLIC_MKS_TEAM_ID for CAC-Match-Report.
 -- ============================================================================
 
-with new_academy as (
-  insert into public.academies (name, slug) values
-    ('MKS Podlasie Sokołów Podlaski', 'mks-podlasie-sokolow-podlaski')
-  returning academy_id
-)
-insert into public.teams (team_name, academy_id, is_home)
-select 'MKS Podlasie Sokołów Podlaski', academy_id, true from new_academy
-returning academy_id, team_id;
+insert into public.teams (team_name, is_home) values
+  ('MKS Podlasie Sokołów Podlaski', true)
+  returning team_id;
 
 
 -- ============================================================================
 -- SECTION 7 — PUBLIC READ ADDENDUM
--- Lets the two public report sites read MKS Podlasie's data with just the
--- anon key, no login required. Scoped to ONE literal academy_id (looked up
--- automatically below — no manual UUID copy-paste needed) so that if Calcio
--- AC ever onboards a second client into this same project, that club's data
--- stays invisible to the public internet. `match_notes` is deliberately NOT
--- exposed here — internal scouting notes stay analyst-only.
+-- Lets the two public report sites read match data with just the anon key,
+-- no login required. Since this is a single-club database, there's no
+-- multi-tenant data to accidentally leak — every row in these tables already
+-- belongs to MKS Podlasie (or an opponent they played), so anon read is
+-- simply "on", full stop. `match_notes` stays analyst-only (internal
+-- scouting notes, never exposed to anon).
 -- ============================================================================
 
-do $$
-declare
-  v_academy_id uuid;
-begin
-  select academy_id into v_academy_id from public.academies
-   where slug = 'mks-podlasie-sokolow-podlaski';
-
-  if v_academy_id is null then
-    raise exception 'Run Section 6 first -- no MKS Podlasie academy row found.';
-  end if;
-
-  execute format('create policy anon_read_teams on public.teams for select to anon using (academy_id = %L)', v_academy_id);
-  execute format('create policy anon_read_players on public.players for select to anon using (exists (select 1 from public.teams t where t.team_id = players.team_id and t.academy_id = %L))', v_academy_id);
-  execute format('create policy anon_read_matches on public.matches for select to anon using (academy_id = %L)', v_academy_id);
-  execute format('create policy anon_read_lineups on public.lineups for select to anon using (exists (select 1 from public.matches m where m.match_id = lineups.match_id and m.academy_id = %L))', v_academy_id);
-  execute format('create policy anon_read_match_events on public.match_events for select to anon using (exists (select 1 from public.matches m where m.match_id = match_events.match_id and m.academy_id = %L))', v_academy_id);
-  execute format('create policy anon_read_pme on public.processed_match_events for select to anon using (exists (select 1 from public.matches m where m.match_id = processed_match_events.match_id and m.academy_id = %L))', v_academy_id);
-end $$;
+create policy anon_read_teams on public.teams for select to anon using (true);
+create policy anon_read_players on public.players for select to anon using (true);
+create policy anon_read_matches on public.matches for select to anon using (true);
+create policy anon_read_lineups on public.lineups for select to anon using (true);
+create policy anon_read_match_events on public.match_events for select to anon using (true);
+create policy anon_read_pme on public.processed_match_events for select to anon using (true);
 
 
 -- ============================================================================
@@ -742,13 +637,12 @@ end $$;
 -- an UPDATE, for the very first user):
 -- ============================================================================
 
--- insert into public.profiles (id, username, role, academy_id) values
---   ('<PASTE_YOUR_AUTH_USER_UUID_HERE>', 'precious', 'super_admin', null);
+-- insert into public.profiles (id, username, role) values
+--   ('<PASTE_YOUR_AUTH_USER_UUID_HERE>', 'precious', 'super_admin');
 
 -- ============================================================================
 -- DONE. Verify with:
---   select * from public.academies;
 --   select * from public.teams;
---   select role, academy_id from public.profiles;
+--   select role from public.profiles;
 --   select count(*) from public.action_flow_rules;   -- should be 100
 -- ============================================================================
