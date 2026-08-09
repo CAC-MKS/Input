@@ -119,7 +119,13 @@ class App {
 
         if (user) {
             // Fetch role with retry — don't reset to null first so
-            // stale data is better than nothing during concurrent calls
+            // stale data is better than nothing during concurrent calls.
+            // IMPORTANT: default is DENY, not 'analyst' — a valid Supabase
+            // login (e.g. a coach account that only exists to unlock gated
+            // sections on the public report sites) is NOT the same thing as
+            // being a recognized team member with a `profiles` row. Never
+            // grant tagging access just because the role fetch failed.
+            let roleFetched = false;
             for (let attempt = 0; attempt < 2; attempt++) {
                 try {
                     const { data: profile, error } = await supabase
@@ -128,17 +134,19 @@ class App {
                         .eq('id', user.id)
                         .single();
                     if (error) throw error;
-                    this.userRole = profile?.role || 'analyst';
+                    this.userRole = profile?.role || null;
+                    roleFetched = true;
                     break;
                 } catch (e) {
                     console.warn(`Role fetch attempt ${attempt + 1} failed:`, e.message);
-                    if (attempt === 1) this.userRole = this.userRole || 'analyst';
                 }
             }
+            if (!roleFetched) this.userRole = null;
 
-            // Defensive: only super_admin and analyst can use this site
+            // Only super_admin and analyst (i.e. someone with a profiles row)
+            // can use this site — everyone else is denied, no fail-open default.
             if (this.userRole !== 'super_admin' && this.userRole !== 'analyst') {
-                alert('Your account role is not allowed on this site. Please contact your administrator.');
+                alert('This account is not set up for the tagging tool. Please contact your administrator.');
                 await supabase.auth.signOut();
                 return;
             }
