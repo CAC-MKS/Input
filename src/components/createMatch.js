@@ -362,34 +362,53 @@ async function handleCreateMatch() {
         if (mErr) throw mErr;
 
         // 4. Insert Players & Lineups
+        // Reuse an existing player row when the (normalized) name already
+        // exists on that team, so the same real person keeps one player_id
+        // across matches — that's what lets CAC-player-report compare their
+        // performance over time instead of treating each match as a
+        // different player. Scoped per-team so two different clubs' players
+        // who happen to share a name never get merged into one.
+        const normalizeName = (s) => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+
+        const teamIdsInRoster = [...new Set(parsedRoster.map(p => teamsMap.get(p.teamName)))];
+        const { data: existingPlayers, error: epErr } = await supabase
+            .from('players')
+            .select('player_id, player_name, team_id')
+            .in('team_id', teamIdsInRoster);
+        if (epErr) throw epErr;
+
+        const playerIdByTeamAndName = new Map(); // `${team_id}::${normalizedName}` -> player_id
+        for (const ep of (existingPlayers || [])) {
+            playerIdByTeamAndName.set(`${ep.team_id}::${normalizeName(ep.player_name)}`, ep.player_id);
+        }
+
         for (const p of parsedRoster) {
-            let { data: player, error: pErr } = await supabase
-                .from('players')
-                .select('player_id')
-                .eq('player_name', p.playerName)
-                .single();
-            
-            if (!player) {
+            const teamId = teamsMap.get(p.teamName);
+            const key = `${teamId}::${normalizeName(p.playerName)}`;
+            let playerId = playerIdByTeamAndName.get(key);
+
+            if (!playerId) {
                 const { data: newPlayer, error: npErr } = await supabase
                     .from('players')
-                    .insert({ 
-                        player_name: p.playerName, 
-                        team_id: teamsMap.get(p.teamName),
-                        position: p.position, 
-                        created_by: user.id 
+                    .insert({
+                        player_name: p.playerName,
+                        team_id: teamId,
+                        position: p.position,
+                        created_by: user.id
                     })
                     .select('player_id')
                     .single();
                 if (npErr) throw npErr;
-                player = newPlayer;
+                playerId = newPlayer.player_id;
+                playerIdByTeamAndName.set(key, playerId); // covers duplicate rows within this same roster file
             }
 
             const { error: lErr } = await supabase
                 .from('lineups')
                 .insert({
                     match_id: match.match_id,
-                    team_id: teamsMap.get(p.teamName),
-                    player_id: player.player_id,
+                    team_id: teamId,
+                    player_id: playerId,
                     jersey_no: p.jerseyNo,
                     position: p.position,
                     starting_xi: p.startingXI,
