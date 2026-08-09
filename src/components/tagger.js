@@ -530,6 +530,26 @@ function startAnalystActivityPolling(matchId) {
     analystActivityInterval = setInterval(() => loadAnalystActivity(matchId), 30 * 1000);
 }
 
+// A gap longer than this between two of the same analyst's consecutive
+// tagged events means they've moved to a different passage of play —
+// split into a new coverage segment rather than one continuous range.
+const ACTIVITY_GAP_THRESHOLD_SEC = 120;
+
+// Collapse a sorted list of timestamps into contiguous [start, end] ranges.
+function computeCoverageSegments(times) {
+    const sorted = [...times].sort((a, b) => a - b);
+    const segments = [];
+    for (const t of sorted) {
+        const last = segments[segments.length - 1];
+        if (last && t - last.end <= ACTIVITY_GAP_THRESHOLD_SEC) {
+            last.end = t;
+        } else {
+            segments.push({ start: t, end: t });
+        }
+    }
+    return segments;
+}
+
 async function loadAnalystActivity(matchId) {
     const bar = document.getElementById('analyst-activity-bar');
     if (!bar) return;
@@ -545,10 +565,8 @@ async function loadAnalystActivity(matchId) {
     for (const row of data) {
         const key = row.analyst_id;
         const name = row.analyst?.username || 'Unknown';
-        if (!byAnalyst.has(key)) byAnalyst.set(key, { name, count: 0, maxTime: 0 });
-        const entry = byAnalyst.get(key);
-        entry.count += 1;
-        entry.maxTime = Math.max(entry.maxTime, row.match_time_seconds ?? 0);
+        if (!byAnalyst.has(key)) byAnalyst.set(key, { name, times: [] });
+        byAnalyst.get(key).times.push(row.match_time_seconds ?? 0);
     }
 
     if (byAnalyst.size === 0) {
@@ -556,22 +574,29 @@ async function loadAnalystActivity(matchId) {
         return;
     }
 
-    const fmtTime = (s) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
+    const fmtMin = (s) => `${Math.floor(s / 60)}'`;
     const meId = _cachedUser?.id;
     const pills = [...byAnalyst.entries()]
-        .sort((a, b) => b[1].count - a[1].count)
-        .map(([id, { name, count, maxTime }]) => {
+        .map(([id, { name, times }]) => ({ id, name, times, segments: computeCoverageSegments(times) }))
+        .sort((a, b) => b.times.length - a.times.length)
+        .map(({ id, name, times, segments }) => {
             const isMe = id === meId;
+            const rangesLabel = segments
+                .map(seg => seg.start === seg.end ? fmtMin(seg.start) : `${fmtMin(seg.start)}–${fmtMin(seg.end)}`)
+                .join(', ');
+            const fullTitle = `${times.length} events · ${segments.length} segment${segments.length !== 1 ? 's' : ''}: ${rangesLabel}`;
             return `
-                <span title="${count} events tagged, latest at ${fmtTime(maxTime)}" style="
-                    display: inline-flex; align-items: center; gap: 5px;
-                    padding: 3px 9px; border-radius: 999px; font-size: 0.7rem; font-weight: 600;
+                <span title="${fullTitle}" style="
+                    display: inline-flex; align-items: center; gap: 6px;
+                    padding: 4px 10px; border-radius: 8px; font-size: 0.7rem; font-weight: 600;
                     border: 1px solid ${isMe ? 'var(--accent)' : 'var(--border)'};
                     background: ${isMe ? 'var(--accent-glow)' : 'var(--bg-card)'};
-                    color: var(--text-main);
+                    color: var(--text-main); max-width: 320px;
                 ">
                     <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--success); flex-shrink: 0;"></span>
-                    ${name}${isMe ? ' (you)' : ''} · ${count} · up to ${fmtTime(maxTime)}
+                    <span style="white-space: nowrap;">${name}${isMe ? ' (you)' : ''}</span>
+                    <span style="opacity: 0.6;">·</span>
+                    <span style="font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${rangesLabel}</span>
                 </span>
             `;
         })
