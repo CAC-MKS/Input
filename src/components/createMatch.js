@@ -311,31 +311,46 @@ async function handleCreateMatch() {
         // 1. Create or get tournament (optional optimization, but let's just use text for now or insert into table)
         // For SaaS, we just insert into 'matches' directly which has match_name as meta.
 
-        // 2. Insert Teams (ensure unique by name for this user or global?)
-        // The PRD says "Auto-generate teams/players and save to DB".
-        // I'll check first if the team exists in the user's scope or global.
-        
+        // 2. Insert Teams
+        // Reuse an existing team row when the (normalized) name already
+        // exists, so re-uploading a roster for the same real team keeps one
+        // team_id — critical here since both public report sites are
+        // configured with a single hardcoded MKS team_id (VITE_TEAM_ID /
+        // NEXT_PUBLIC_MKS_TEAM_ID); a case/whitespace variant creating a
+        // second "MKS" team row would silently break both sites for that
+        // match. Normalization only smooths over case/whitespace, not
+        // missing diacritics or genuinely different spellings — keep the
+        // roster template's team-name column consistent.
+        const normalizeTeamName = (s) => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+
+        const { data: existingTeams, error: etErr } = await supabase
+            .from('teams')
+            .select('team_id, team_name');
+        if (etErr) throw etErr;
+
+        const teamIdByNormalizedName = new Map();
+        for (const t of (existingTeams || [])) {
+            teamIdByNormalizedName.set(normalizeTeamName(t.team_name), t.team_id);
+        }
+
         const teamsMap = new Map(); // teamName -> teamId
         const teamNames = [...new Set(parsedRoster.map(p => p.teamName))];
 
         for (const tName of teamNames) {
-            // Look up an existing team by name first; if none, create it
-            let { data: team } = await supabase
-                .from('teams')
-                .select('team_id')
-                .eq('team_name', tName)
-                .maybeSingle();
+            const key = normalizeTeamName(tName);
+            let teamId = teamIdByNormalizedName.get(key);
 
-            if (!team) {
+            if (!teamId) {
                 const { data: newTeam, error: nErr } = await supabase
                     .from('teams')
                     .insert({ team_name: tName, created_by: user.id })
                     .select('team_id')
                     .single();
                 if (nErr) throw nErr;
-                team = newTeam;
+                teamId = newTeam.team_id;
+                teamIdByNormalizedName.set(key, teamId); // covers duplicate names within this same roster file
             }
-            teamsMap.set(tName, team.team_id);
+            teamsMap.set(tName, teamId);
         }
 
         // 3. Create Match
