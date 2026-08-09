@@ -1949,12 +1949,13 @@ function renderStaging() {
 }
 
 async function loadSyncedEvents() {
-    if (!activeMatch) return;
+    if (!activeMatch) { console.warn('loadSyncedEvents: no activeMatch'); return; }
 
     // Paginated fetch — Supabase limits to 1000 rows per request
     let allData = [];
     let rangeStart = 0;
     const PAGE_SIZE = 1000;
+    let useFallback = false;
 
     while (true) {
         const { data, error } = await supabase
@@ -1964,19 +1965,48 @@ async function loadSyncedEvents() {
             .order('match_time_seconds', { ascending: true })
             .range(rangeStart, rangeStart + PAGE_SIZE - 1);
 
-        if (error) { console.error('Failed to load synced events:', error); return; }
+        if (error) {
+            console.warn('Primary synced events query failed, trying fallback:', error.message);
+            useFallback = true;
+            break;
+        }
         allData = allData.concat(data || []);
         if (!data || data.length < PAGE_SIZE) break;
         rangeStart += PAGE_SIZE;
     }
+
+    // Fallback: fetch without player joins if the primary query failed
+    if (useFallback) {
+        allData = [];
+        rangeStart = 0;
+        while (true) {
+            const { data, error } = await supabase
+                .from('match_events')
+                .select('*')
+                .eq('match_id', activeMatch.match_id)
+                .order('match_time_seconds', { ascending: true })
+                .range(rangeStart, rangeStart + PAGE_SIZE - 1);
+
+            if (error) { console.error('Fallback synced events query also failed:', error); return; }
+            allData = allData.concat(data || []);
+            if (!data || data.length < PAGE_SIZE) break;
+            rangeStart += PAGE_SIZE;
+        }
+    }
+
+    console.log(`loadSyncedEvents: loaded ${allData.length} events from DB`);
 
     syncedEvents = allData.map(e => {
         const pLineup = activeLineup.find(l => l.player_id === e.player_id);
         const rLineup = activeLineup.find(l => l.player_id === e.reaction_player_id);
         return {
             ...e,
-            _ui_player: e.player ? `${e.player.player_name} (${pLineup?.jersey_no || '?'})` : 'Unknown',
-            _ui_reaction_player: e.reaction ? `${e.reaction.player_name} (${rLineup?.jersey_no || '?'})` : null,
+            _ui_player: e.player
+                ? `${e.player.player_name} (${pLineup?.jersey_no || '?'})`
+                : (pLineup ? `${pLineup.players.player_name} (${pLineup.jersey_no})` : 'Unknown'),
+            _ui_reaction_player: e.reaction
+                ? `${e.reaction.player_name} (${rLineup?.jersey_no || '?'})`
+                : (rLineup ? `${rLineup.players.player_name} (${rLineup.jersey_no})` : null),
         };
     });
     renderStaging();
