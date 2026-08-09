@@ -40,8 +40,7 @@ export function RegisterView() {
             <h2 class="auth-title">Registration Closed</h2>
             <p class="auth-subtitle">Accounts on this site are created by the super admin.</p>
             <p style="font-size: 0.85rem; color: var(--text-muted); margin: 20px 0;">
-                If you need access, please contact your administrator. They will create an analyst account
-                and assign you to your academy.
+                If you need access, please contact your administrator. They will create your account for you.
             </p>
             <div style="margin-top: 16px; text-align: center;">
                 <a href="#login" class="btn btn-primary" style="display: inline-block;">Back to Login</a>

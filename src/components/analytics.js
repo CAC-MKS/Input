@@ -81,12 +81,9 @@ export function AnalyticsView() {
 
 export async function initAnalytics() {
     try {
-        // Get current user and role
+        // Get current user
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
-        const { data: profile } = await supabase.from('profiles').select('role, academy_id').eq('id', user.id).single();
-        const isSuperAdmin = profile?.role === 'super_admin';
-        const myAcademyId = profile?.academy_id || null;
 
         // Paginated fetch helper — Supabase limits to 1000 rows per request
         async function fetchAll(query) {
@@ -101,49 +98,12 @@ export async function initAnalytics() {
             return all;
         }
 
-        let matches, events, profiles;
-
-        if (isSuperAdmin) {
-            // Super admin sees everything across all academies — paginated
-            [matches, events, profiles] = await Promise.all([
-                fetchAll(supabase.from('matches').select('match_id, created_by, created_at, status, academy_id')),
-                fetchAll(supabase.from('match_events').select('match_event_id, match_id, analyst_id, action, created_at')),
-                fetchAll(supabase.from('profiles').select('id, username, role, academy_id')),
-            ]);
-        } else {
-            // Analyst sees everything inside their academy — paginated
-            const matchesInAcademy = await fetchAll(
-                supabase.from('matches')
-                    .select('match_id, created_by, created_at, status, academy_id')
-                    .eq('academy_id', myAcademyId)
-            );
-            const matchIds = matchesInAcademy.map(m => m.match_id);
-
-            let academyEvents = [];
-            if (matchIds.length > 0) {
-                // Supabase .in() supports up to ~1000 ids per request — chunk just in case
-                const chunkSize = 500;
-                for (let i = 0; i < matchIds.length; i += chunkSize) {
-                    const chunk = matchIds.slice(i, i + chunkSize);
-                    const part = await fetchAll(
-                        supabase.from('match_events')
-                            .select('match_event_id, match_id, analyst_id, action, created_at')
-                            .in('match_id', chunk)
-                    );
-                    academyEvents = academyEvents.concat(part);
-                }
-            }
-
-            const academyProfiles = await fetchAll(
-                supabase.from('profiles')
-                    .select('id, username, role, academy_id')
-                    .eq('academy_id', myAcademyId)
-            );
-
-            matches = matchesInAcademy;
-            events = academyEvents;
-            profiles = academyProfiles;
-        }
+        // All authenticated users see stats across all matches — paginated
+        const [matches, events, profiles] = await Promise.all([
+            fetchAll(supabase.from('matches').select('match_id, created_by, created_at, status')),
+            fetchAll(supabase.from('match_events').select('match_event_id, match_id, analyst_id, action, created_at')),
+            fetchAll(supabase.from('profiles').select('id, username, role')),
+        ]);
 
         // Summary stats
         const totalMatches = matches.length;
@@ -157,21 +117,13 @@ export async function initAnalytics() {
         document.getElementById('stat-today-events').textContent = todayEvents;
         document.getElementById('stat-avg-events').textContent = avgEvents;
 
-        // Update header for analysts
-        if (!isSuperAdmin) {
-            const subtitle = document.querySelector('.page-subtitle');
-            if (subtitle) subtitle.textContent = 'Tagging statistics for your academy';
-            const title = document.querySelector('.page-title');
-            if (title) title.textContent = 'Academy Analytics';
-        }
-
         // Daily events chart (last 30 days)
         renderDailyChart(events);
 
         // Action breakdown chart
         renderActionChart(events);
 
-        // Leaderboard — for analysts this is scoped to their academy
+        // Leaderboard
         renderLeaderboard(events, matches, profiles);
     } catch (err) {
         console.error('Analytics load error:', err);

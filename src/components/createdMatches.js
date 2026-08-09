@@ -5,7 +5,7 @@ export function MatchesView() {
         <div class="fade-in">
             <header class="page-header">
                 <h1 class="page-title">My Matches</h1>
-                <p class="page-subtitle">All matches in your academy</p>
+                <p class="page-subtitle">All tagged matches</p>
             </header>
 
             <div id="matches-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 24px;">
@@ -22,34 +22,18 @@ export async function initMatches() {
 
     try {
         const { data: { user } } = await supabase.auth.getUser();
-        const { data: profile } = await supabase
-            .from('profiles')
-            .select('role, academy_id')
-            .eq('id', user.id)
-            .single();
-        const isSuperAdmin = profile?.role === 'super_admin';
-        const myAcademyId = profile?.academy_id || null;
 
-        // Build the matches query — academy-scoped for analysts, all for super_admin
-        // (RLS also enforces this on the server side)
-        let matchesQuery = supabase
+        // All authenticated users see all matches (RLS also enforces this server-side)
+        const matchesQuery = supabase
             .from('matches')
             .select(`
-                match_id, match_name, match_date, status, video_url, locked_by, locked_at, created_by, academy_id,
+                match_id, match_name, match_date, status, video_url, locked_by, locked_at, created_by,
                 home_team:teams!home_team_id(team_name),
                 away_team:teams!away_team_id(team_name)
             `)
             .order('created_at', { ascending: false });
 
-        if (!isSuperAdmin && myAcademyId) {
-            matchesQuery = matchesQuery.eq('academy_id', myAcademyId);
-        }
-
-        // Fetch matches, analysts (same academy), and assignments in parallel
-        let analystsQuery = supabase.from('profiles').select('id, username').order('username');
-        if (!isSuperAdmin && myAcademyId) {
-            analystsQuery = analystsQuery.eq('academy_id', myAcademyId);
-        }
+        const analystsQuery = supabase.from('profiles').select('id, username').order('username');
 
         const [matchesResult, analystsResult, assignmentsResult] = await Promise.all([
             matchesQuery,

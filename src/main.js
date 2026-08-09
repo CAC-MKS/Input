@@ -20,7 +20,6 @@ class App {
         this.appElement = document.getElementById('app');
         this.user = null;
         this.userRole = null;
-        this.academyId = null;
         this._sessionWarningTimer = null;
         this._sessionExpireTimer = null;
         this._renderLock = null;
@@ -119,18 +118,17 @@ class App {
         this.user = user;
 
         if (user) {
-            // Fetch role + academy with retry — don't reset to null first so
+            // Fetch role with retry — don't reset to null first so
             // stale data is better than nothing during concurrent calls
             for (let attempt = 0; attempt < 2; attempt++) {
                 try {
                     const { data: profile, error } = await supabase
                         .from('profiles')
-                        .select('role, academy_id')
+                        .select('role')
                         .eq('id', user.id)
                         .single();
                     if (error) throw error;
                     this.userRole = profile?.role || 'analyst';
-                    this.academyId = profile?.academy_id || null;
                     break;
                 } catch (e) {
                     console.warn(`Role fetch attempt ${attempt + 1} failed:`, e.message);
@@ -145,17 +143,9 @@ class App {
                 return;
             }
 
-            // Analysts MUST be assigned to an academy by the super_admin
-            if (this.userRole === 'analyst' && !this.academyId) {
-                alert('Your account has not been assigned to an academy yet. Please contact your administrator.');
-                await supabase.auth.signOut();
-                return;
-            }
-
             this.resetSessionTimers();
         } else {
             this.userRole = null;
-            this.academyId = null;
             clearTimeout(this._sessionWarningTimer);
             clearTimeout(this._sessionExpireTimer);
         }

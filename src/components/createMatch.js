@@ -43,15 +43,6 @@ export function CreateMatchView() {
                                 <option value="false">Standard Football (120m x 80m)</option>
                             </select>
                         </div>
-                        <div class="form-group" id="academy-picker-group" style="display: none;">
-                            <label class="form-label">Academy</label>
-                            <select id="academy-picker" class="form-input">
-                                <option value="">Loading academies…</option>
-                            </select>
-                            <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 4px;">
-                                As super admin you must pick which academy this match belongs to.
-                            </div>
-                        </div>
                     </form>
                 </section>
 
@@ -204,42 +195,6 @@ export function initCreateMatch() {
     });
 
     createBtn.addEventListener('click', handleCreateMatch);
-
-    // Show academy picker for super_admin (they have no default academy)
-    initAcademyPicker();
-}
-
-async function initAcademyPicker() {
-    try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
-        const { data: profile } = await supabase
-            .from('profiles')
-            .select('role')
-            .eq('id', user.id)
-            .single();
-        if (profile?.role !== 'super_admin') return;
-
-        const group = document.getElementById('academy-picker-group');
-        const select = document.getElementById('academy-picker');
-        if (!group || !select) return;
-
-        const { data: academies, error } = await supabase
-            .from('academies')
-            .select('academy_id, name')
-            .order('name');
-        if (error) throw error;
-
-        if (!academies || academies.length === 0) {
-            select.innerHTML = '<option value="">No academies — create one in the admin portal first</option>';
-        } else {
-            select.innerHTML = '<option value="">— Select an academy —</option>'
-                + academies.map(a => `<option value="${a.academy_id}">${a.name}</option>`).join('');
-        }
-        group.style.display = 'block';
-    } catch (err) {
-        console.warn('Academy picker init failed:', err.message);
-    }
 }
 
 async function handleFile(file) {
@@ -353,27 +308,6 @@ async function handleCreateMatch() {
     try {
         const { data: { user } } = await supabase.auth.getUser();
 
-        // Determine which academy this match belongs to:
-        //   – analyst: their own profile.academy_id (also auto-stamped by DB trigger)
-        //   – super_admin: must pick one from the academy picker
-        const { data: profile } = await supabase
-            .from('profiles')
-            .select('role, academy_id')
-            .eq('id', user.id)
-            .single();
-
-        let matchAcademyId = profile?.academy_id || null;
-        if (profile?.role === 'super_admin') {
-            const picker = document.getElementById('academy-picker');
-            matchAcademyId = picker?.value || null;
-            if (!matchAcademyId) {
-                alert('Please select which academy this match belongs to.');
-                btn.innerText = 'Initialize Match Session';
-                btn.disabled = false;
-                return;
-            }
-        }
-
         // 1. Create or get tournament (optional optimization, but let's just use text for now or insert into table)
         // For SaaS, we just insert into 'matches' directly which has match_name as meta.
 
@@ -385,20 +319,17 @@ async function handleCreateMatch() {
         const teamNames = [...new Set(parsedRoster.map(p => p.teamName))];
 
         for (const tName of teamNames) {
-            // Look up an existing team in the same academy first; if none, create it
-            let teamLookup = supabase
+            // Look up an existing team by name first; if none, create it
+            let { data: team } = await supabase
                 .from('teams')
                 .select('team_id')
-                .eq('team_name', tName);
-            if (matchAcademyId) {
-                teamLookup = teamLookup.eq('academy_id', matchAcademyId);
-            }
-            let { data: team } = await teamLookup.maybeSingle();
+                .eq('team_name', tName)
+                .maybeSingle();
 
             if (!team) {
                 const { data: newTeam, error: nErr } = await supabase
                     .from('teams')
-                    .insert({ team_name: tName, created_by: user.id, academy_id: matchAcademyId })
+                    .insert({ team_name: tName, created_by: user.id })
                     .select('team_id')
                     .single();
                 if (nErr) throw nErr;
@@ -423,7 +354,6 @@ async function handleCreateMatch() {
                 video_url: videoType === 'youtube' ? ytUrl : null,
                 status: 'Doing',
                 created_by: user.id,
-                academy_id: matchAcademyId,
             })
             .select('match_id')
             .single();

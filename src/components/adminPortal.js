@@ -9,7 +9,6 @@ let allMatches = [];
 let allTeams = [];
 let allPlayers = [];
 let allUsers = [];
-let allAcademies = [];
 let allAssignments = {};
 let flowRules = [];
 let flowEdits = {};
@@ -75,68 +74,12 @@ export function AdminPortalView() {
         </header>
 
         <div class="admin-tabs">
-            <button class="admin-tab active" data-tab="academies">Academies</button>
-            <button class="admin-tab" data-tab="users">Analysts</button>
+            <button class="admin-tab active" data-tab="users">Analysts</button>
             <button class="admin-tab" data-tab="matches">Matches</button>
             <button class="admin-tab" data-tab="teams">Merge Teams</button>
             <button class="admin-tab" data-tab="players">Merge Players</button>
             <button class="admin-tab" data-tab="actionflow">Action Flow</button>
         </div>
-
-        <!-- ACADEMIES TAB -->
-        <section id="admin-tab-academies" class="admin-section visible">
-            <div class="card">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px;">
-                    <h3 style="margin: 0;">Academies</h3>
-                    <button id="btn-create-academy" class="btn btn-primary" style="width: auto; padding: 8px 20px;">+ Create Academy</button>
-                </div>
-                <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 16px;">
-                    Each academy is an isolated workspace. Analysts only see matches, teams, and players belonging to the academy they are assigned to.
-                </p>
-                <div style="overflow-x: auto;">
-                    <table class="admin-table">
-                        <thead>
-                            <tr>
-                                <th>Name</th>
-                                <th>Slug</th>
-                                <th>Analysts</th>
-                                <th>Matches</th>
-                                <th>Created</th>
-                                <th style="text-align: center;">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="admin-academies-tbody">
-                            <tr><td colspan="6" style="text-align: center; padding: 40px; color: var(--text-muted);">Loading…</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- Create Academy Modal -->
-            <div id="academy-modal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100; align-items: center; justify-content: center;">
-                <div style="background: var(--bg-card); padding: 32px; border-radius: var(--radius-xl); max-width: 420px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.2);">
-                    <h3 id="academy-modal-title" style="margin-bottom: 16px;">Create Academy</h3>
-                    <input type="hidden" id="academy-modal-id">
-                    <div class="form-group">
-                        <label class="form-label">Name</label>
-                        <input id="academy-modal-name" class="form-input" placeholder="Academy name">
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Slug</label>
-                        <input id="academy-modal-slug" class="form-input" placeholder="academy-slug (lowercase, no spaces)">
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Logo URL (optional)</label>
-                        <input id="academy-modal-logo" class="form-input" placeholder="https://...">
-                    </div>
-                    <div id="academy-modal-error" style="color: var(--danger); font-size: 0.8rem; margin-bottom: 8px; display: none;"></div>
-                    <div style="display: flex; gap: 8px; margin-top: 8px;">
-                        <button id="academy-modal-cancel" class="btn btn-ghost" style="flex: 1;">Cancel</button>
-                        <button id="academy-modal-save" class="btn btn-primary" style="flex: 1;">Save</button>
-                    </div>
-                </div>
-            </div>
-        </section>
 
         <!-- MATCHES TAB -->
         <section id="admin-tab-matches" class="admin-section">
@@ -184,14 +127,14 @@ export function AdminPortalView() {
         </section>
 
         <!-- ANALYSTS TAB -->
-        <section id="admin-tab-users" class="admin-section">
+        <section id="admin-tab-users" class="admin-section visible">
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px;">
                     <h3 style="margin: 0;">Analysts</h3>
                     <button id="btn-create-analyst" class="btn btn-primary" style="width: auto; padding: 8px 20px;">+ Create Analyst</button>
                 </div>
                 <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 16px;">
-                    Each analyst must be assigned to exactly one academy. Analysts without an academy cannot log in until you assign one.
+                    Analysts can log in immediately once created.
                 </p>
                 <div style="overflow-x: auto;">
                     <table class="admin-table">
@@ -199,7 +142,6 @@ export function AdminPortalView() {
                             <tr>
                                 <th>Username</th>
                                 <th>Role</th>
-                                <th>Academy</th>
                                 <th style="text-align: center;">Actions</th>
                             </tr>
                         </thead>
@@ -224,10 +166,6 @@ export function AdminPortalView() {
                         <label class="form-label">Temporary Password</label>
                         <input id="analyst-modal-password" class="form-input" type="text" placeholder="Min 8 chars, letters, numbers, special">
                         <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 4px;">Share this with the analyst. They can reset it later.</div>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Academy</label>
-                        <select id="analyst-modal-academy" class="form-input"></select>
                     </div>
                     <div id="analyst-modal-error" style="color: var(--danger); font-size: 0.8rem; margin-bottom: 8px; display: none;"></div>
                     <div style="display: flex; gap: 8px; margin-top: 8px;">
@@ -353,9 +291,6 @@ export async function initAdminPortal() {
         });
     });
 
-    // Load academies first — both Analysts and Matches tabs depend on it
-    await fetchAdminAcademies();
-
     // Load all sections in parallel
     await Promise.all([
         fetchAdminMatches(),
@@ -364,11 +299,6 @@ export async function initAdminPortal() {
         fetchPlayerMergeData(),
         fetchFlowRules(),
     ]);
-
-    // Academy modal handlers
-    document.getElementById('btn-create-academy').addEventListener('click', () => openAcademyModal());
-    document.getElementById('academy-modal-cancel').addEventListener('click', closeAcademyModal);
-    document.getElementById('academy-modal-save').addEventListener('click', saveAcademyModal);
 
     // Analyst modal handlers
     document.getElementById('btn-create-analyst').addEventListener('click', openAnalystModal);
@@ -471,7 +401,6 @@ async function fetchAdminMatches() {
     }));
 
     renderMatchRows();
-    renderAcademiesTable();
 }
 
 function renderMatchRows() {
@@ -747,134 +676,6 @@ async function fetchEnrichedEvents(matchId) {
 }
 
 /* ──────────────────────────────────────────
-   ACADEMIES
-   ────────────────────────────────────────── */
-async function fetchAdminAcademies() {
-    const { data, error } = await supabase
-        .from('academies')
-        .select('academy_id, name, slug, logo_url, created_at')
-        .order('name');
-    if (error) {
-        console.error('Failed to load academies:', error);
-        allAcademies = [];
-    } else {
-        allAcademies = data || [];
-    }
-    renderAcademiesTable();
-}
-
-function renderAcademiesTable() {
-    const tbody = document.getElementById('admin-academies-tbody');
-    if (!tbody) return;
-    if (!allAcademies.length) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 40px; color: var(--text-muted);">No academies yet. Click + Create Academy to get started.</td></tr>';
-        return;
-    }
-
-    // Compute analyst + match counts per academy from already-loaded data
-    const analystCounts = {};
-    const matchCounts = {};
-    (allUsers || []).forEach(u => {
-        if (u.role === 'analyst' && u.academy_id) {
-            analystCounts[u.academy_id] = (analystCounts[u.academy_id] || 0) + 1;
-        }
-    });
-    (allMatches || []).forEach(m => {
-        if (m.academy_id) matchCounts[m.academy_id] = (matchCounts[m.academy_id] || 0) + 1;
-    });
-
-    tbody.innerHTML = allAcademies.map(a => `
-        <tr>
-            <td><strong>${a.name}</strong></td>
-            <td style="color: var(--text-muted); font-size: 0.75rem;">${a.slug}</td>
-            <td style="text-align: center;">${analystCounts[a.academy_id] || 0}</td>
-            <td style="text-align: center;">${matchCounts[a.academy_id] || 0}</td>
-            <td style="font-size: 0.75rem; color: var(--text-muted);">${a.created_at ? new Date(a.created_at).toLocaleDateString() : '-'}</td>
-            <td style="text-align: center; white-space: nowrap;">
-                <button class="dl-btn" data-edit-academy="${a.academy_id}">Edit</button>
-                <button class="dl-btn" data-delete-academy="${a.academy_id}" style="color: var(--danger); border-color: var(--danger);">Delete</button>
-            </td>
-        </tr>
-    `).join('');
-
-    tbody.querySelectorAll('[data-edit-academy]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const a = allAcademies.find(x => x.academy_id === btn.dataset.editAcademy);
-            if (a) openAcademyModal(a);
-        });
-    });
-    tbody.querySelectorAll('[data-delete-academy]').forEach(btn => {
-        btn.addEventListener('click', () => deleteAcademy(btn.dataset.deleteAcademy));
-    });
-}
-
-function openAcademyModal(academy) {
-    document.getElementById('academy-modal-title').textContent = academy ? 'Edit Academy' : 'Create Academy';
-    document.getElementById('academy-modal-id').value = academy?.academy_id || '';
-    document.getElementById('academy-modal-name').value = academy?.name || '';
-    document.getElementById('academy-modal-slug').value = academy?.slug || '';
-    document.getElementById('academy-modal-logo').value = academy?.logo_url || '';
-    document.getElementById('academy-modal-error').style.display = 'none';
-    document.getElementById('academy-modal').style.display = 'flex';
-}
-
-function closeAcademyModal() {
-    document.getElementById('academy-modal').style.display = 'none';
-}
-
-async function saveAcademyModal() {
-    const id = document.getElementById('academy-modal-id').value;
-    const name = document.getElementById('academy-modal-name').value.trim();
-    const slug = document.getElementById('academy-modal-slug').value.trim().toLowerCase().replace(/\s+/g, '-');
-    const logoUrl = document.getElementById('academy-modal-logo').value.trim() || null;
-    const errorEl = document.getElementById('academy-modal-error');
-
-    if (!name || !slug) {
-        errorEl.textContent = 'Name and slug are required.';
-        errorEl.style.display = 'block';
-        return;
-    }
-
-    const { data: { user } } = await supabase.auth.getUser();
-    let result;
-    if (id) {
-        result = await supabase.from('academies').update({ name, slug, logo_url: logoUrl }).eq('academy_id', id);
-    } else {
-        result = await supabase.from('academies').insert({ name, slug, logo_url: logoUrl, created_by: user.id });
-    }
-
-    if (result.error) {
-        errorEl.textContent = result.error.message;
-        errorEl.style.display = 'block';
-        return;
-    }
-
-    closeAcademyModal();
-    await fetchAdminAcademies();
-    renderAcademiesTable();
-}
-
-async function deleteAcademy(academyId) {
-    const academy = allAcademies.find(a => a.academy_id === academyId);
-    if (!academy) return;
-
-    const attachedAnalysts = (allUsers || []).filter(u => u.academy_id === academyId).length;
-    if (attachedAnalysts > 0) {
-        alert(`Cannot delete: ${attachedAnalysts} analyst(s) are still assigned to this academy. Move them to another academy first.`);
-        return;
-    }
-    if (!confirm(`Delete academy "${academy.name}"? This cannot be undone.`)) return;
-
-    const { error } = await supabase.from('academies').delete().eq('academy_id', academyId);
-    if (error) {
-        alert('Delete failed: ' + error.message);
-        return;
-    }
-    await fetchAdminAcademies();
-    renderAcademiesTable();
-}
-
-/* ──────────────────────────────────────────
    ANALYSTS (USERS)
    ────────────────────────────────────────── */
 async function fetchAdminUsers() {
@@ -882,22 +683,16 @@ async function fetchAdminUsers() {
     const { data: users, error } = await supabase.from('profiles').select('*').order('username');
 
     if (error) {
-        tbody.innerHTML = `<tr><td colspan="4" style="padding: 20px; text-align: center; color: var(--danger);">Error: ${error.message}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="3" style="padding: 20px; text-align: center; color: var(--danger);">Error: ${error.message}</td></tr>`;
         return;
     }
 
     allUsers = users || [];
 
     const { data: { user: currentUser } } = await supabase.auth.getUser();
-    const academyMap = Object.fromEntries(allAcademies.map(a => [a.academy_id, a.name]));
 
     tbody.innerHTML = allUsers.map(u => {
         const isMe = u.id === currentUser.id;
-        const academyOptions = '<option value="">— Unassigned —</option>'
-            + allAcademies.map(a => `<option value="${a.academy_id}" ${u.academy_id === a.academy_id ? 'selected' : ''}>${a.name}</option>`).join('');
-        const academyCell = u.role === 'super_admin'
-            ? '<span style="color: var(--text-muted); font-size: 0.75rem;">— (super admin)</span>'
-            : `<select class="assign-select admin-academy-select" data-user-id="${u.id}">${academyOptions}</select>`;
 
         return `
             <tr>
@@ -907,44 +702,15 @@ async function fetchAdminUsers() {
                         ${(u.role || '').toUpperCase()}
                     </span>
                 </td>
-                <td>${academyCell}</td>
                 <td style="text-align: center;">
                     ${isMe ? '<span style="font-size: 0.75rem; color: var(--text-muted);">You</span>' : ''}
                 </td>
             </tr>
         `;
     }).join('');
-
-    // Re-render the academies tab counts now that we have user data
-    renderAcademiesTable();
-
-    // Wire academy reassignment dropdowns
-    tbody.querySelectorAll('.admin-academy-select').forEach(sel => {
-        sel.addEventListener('change', async (e) => {
-            const userId = e.target.dataset.userId;
-            const newAcademyId = e.target.value || null;
-            const { error: upErr } = await supabase
-                .from('profiles')
-                .update({ academy_id: newAcademyId })
-                .eq('id', userId);
-            if (upErr) {
-                alert('Failed to update academy: ' + upErr.message);
-                return;
-            }
-            const u = allUsers.find(x => x.id === userId);
-            if (u) u.academy_id = newAcademyId;
-            renderAcademiesTable();
-        });
-    });
 }
 
 function openAnalystModal() {
-    if (!allAcademies.length) {
-        alert('Create an academy first before creating analysts.');
-        return;
-    }
-    const select = document.getElementById('analyst-modal-academy');
-    select.innerHTML = allAcademies.map(a => `<option value="${a.academy_id}">${a.name}</option>`).join('');
     document.getElementById('analyst-modal-email').value = '';
     document.getElementById('analyst-modal-username').value = '';
     document.getElementById('analyst-modal-password').value = '';
@@ -960,10 +726,9 @@ async function saveAnalystModal() {
     const email = document.getElementById('analyst-modal-email').value.trim().toLowerCase();
     const username = document.getElementById('analyst-modal-username').value.trim();
     const password = document.getElementById('analyst-modal-password').value;
-    const academyId = document.getElementById('analyst-modal-academy').value;
     const errorEl = document.getElementById('analyst-modal-error');
 
-    if (!email || !username || !password || !academyId) {
+    if (!email || !username || !password) {
         errorEl.textContent = 'All fields are required.';
         errorEl.style.display = 'block';
         return;
@@ -1006,7 +771,6 @@ async function saveAnalystModal() {
         id: signUpData.user.id,
         username,
         role: 'analyst',
-        academy_id: academyId,
     });
 
     if (profileError) {
