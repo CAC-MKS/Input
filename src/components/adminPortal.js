@@ -589,10 +589,15 @@ async function bulkDelete() {
 
     const ids = [...selectedMatchIds];
     for (const id of ids) {
-        // Delete events first, then lineups, then match
-        await supabase.from('match_events').delete().eq('match_id', id);
+        // Delete every table with a foreign key back to matches before the
+        // match row itself, or the final delete fails with a FK constraint
+        // violation (processed_match_events also FKs to match_events, so it
+        // must go first).
         await supabase.from('processed_match_events').delete().eq('match_id', id);
+        await supabase.from('match_events').delete().eq('match_id', id);
         await supabase.from('lineups').delete().eq('match_id', id);
+        await supabase.from('match_assignments').delete().eq('match_id', id);
+        await supabase.from('match_notes').delete().eq('match_id', id);
         await supabase.from('matches').delete().eq('match_id', id);
     }
 
