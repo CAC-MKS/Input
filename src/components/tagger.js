@@ -1610,7 +1610,7 @@ function renderStaging() {
 
         return `
             <tr style="border-bottom: 1px solid var(--border); ${bgColor}">
-                <td style="padding: 6px; white-space: nowrap;" class="editable-cell" data-src="${src}" data-edit-idx="${idx}" data-edit-field="match_time_seconds">${timeStr}</td>
+                <td style="padding: 6px; white-space: nowrap; cursor: pointer; color: var(--accent); text-decoration: underline; text-decoration-style: dotted;" class="editable-cell time-seek-cell" data-src="${src}" data-edit-idx="${idx}" data-edit-field="match_time_seconds" data-time="${e.match_time_seconds}" title="Click to jump to ${timeStr}">${timeStr}</td>
                 <td style="padding: 6px; font-weight: 600;" class="editable-cell" data-src="${src}" data-edit-idx="${idx}" data-edit-field="team_direction">${e.team_direction}</td>
                 <td style="padding: 6px;" class="editable-cell" data-src="${src}" data-edit-idx="${idx}" data-edit-field="action">
                     <span style="font-weight:600;">${e.action}</span><br>
@@ -1664,6 +1664,18 @@ function renderStaging() {
         renderStaging();
         updateProgress();
     };
+
+    // Single-click on time cells seeks the video to that timestamp
+    body.querySelectorAll('.time-seek-cell').forEach(cell => {
+        cell.addEventListener('click', (e) => {
+            // Don't seek if they're trying to double-click to edit
+            const timeSec = parseInt(cell.dataset.time);
+            if (!isNaN(timeSec) && video) {
+                video.seek(timeSec);
+                showEventToast(`⏩ Jumped to ${Math.floor(timeSec / 60)}:${(timeSec % 60).toString().padStart(2, '0')}`);
+            }
+        });
+    });
 
     // Inline editing for ALL events (synced + unsynced)
     body.querySelectorAll('[data-edit-idx]').forEach(cell => {
