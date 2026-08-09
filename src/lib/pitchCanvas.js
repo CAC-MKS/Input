@@ -33,7 +33,6 @@ export class PitchCanvas {
             lines: 'rgba(255,255,255,0.85)',
             goal: '#ef4444',
             spot: '#ffffff',
-            centreSpot: '#22c55e',
             grid: 'rgba(255,255,255,0.06)',
             start: '#4ade80',
             end: '#f87171',
@@ -105,16 +104,11 @@ export class PitchCanvas {
         ctx.arc(sx(p.maxX / 2), sy(p.maxY / 2), centerRadius * (this.canvas.width / (p.maxX + 2 * padX)), 0, 2 * Math.PI);
         ctx.stroke();
 
-        // Kick-off spot
-        ctx.fillStyle = c.centreSpot;
-        ctx.beginPath();
-        ctx.arc(sx(p.maxX / 2), sy(p.maxY / 2), 4, 0, 2 * Math.PI);
-        ctx.fill();
-
         // Penalty Areas
         const penaltyHalfDepth = p.type === 'standard' ? 20.16 : 6;
         const penaltyDist = p.type === 'standard' ? 16.5 : 6;
         const penaltySpotDist = p.type === 'standard' ? 11 : 6;
+        const penaltyRadius = 9.15; // "D" arc radius, standard pitches only
         ctx.strokeStyle = c.lines;
         ctx.strokeRect(sx(0), sy(p.maxY / 2 + penaltyHalfDepth), sx(penaltyDist) - sx(0), sy(p.maxY / 2 - penaltyHalfDepth) - sy(p.maxY / 2 + penaltyHalfDepth));
         ctx.strokeRect(sx(p.maxX - penaltyDist), sy(p.maxY / 2 + penaltyHalfDepth), sx(p.maxX) - sx(p.maxX - penaltyDist), sy(p.maxY / 2 - penaltyHalfDepth) - sy(p.maxY / 2 + penaltyHalfDepth));
@@ -127,6 +121,18 @@ export class PitchCanvas {
         ctx.beginPath();
         ctx.arc(sx(p.maxX - penaltySpotDist), sy(p.maxY / 2), 3, 0, 2 * Math.PI);
         ctx.fill();
+
+        // "D" arcs — the portion of the penalty-radius circle outside each box
+        if (p.type === 'standard') {
+            const dRadiusPx = penaltyRadius * (this.canvas.width / (p.maxX + 2 * padX));
+            const dHalfAngle = Math.acos((penaltyDist - penaltySpotDist) / penaltyRadius);
+            ctx.beginPath();
+            ctx.arc(sx(penaltySpotDist), sy(p.maxY / 2), dRadiusPx, -dHalfAngle, dHalfAngle);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(sx(p.maxX - penaltySpotDist), sy(p.maxY / 2), dRadiusPx, Math.PI - dHalfAngle, Math.PI + dHalfAngle);
+            ctx.stroke();
+        }
 
         // Goal mouths — small red markers at each end, centred on the goal line
         const goalHalf = p.goalWidth / 2;
