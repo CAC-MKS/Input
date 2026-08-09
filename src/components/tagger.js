@@ -909,10 +909,23 @@ export async function initTagger() {
         document.getElementById('pitch-coords').innerText = `Start: ${pitch.startPoint ? pitch.startPoint.x.toFixed(1)+','+pitch.startPoint.y.toFixed(1) : 'None'} | End: ${endX},${endY}`;
     };
 
-    // 3. Setup Dropdowns
+    // 3. Setup Dropdowns (grouped by category)
+    const groupLabels = { atk: '⚔ Attacking', def: '🛡 Defensive', set: '📋 Set Piece', meta: '⚙ Other' };
+    const groupOrder = ['atk', 'def', 'set', 'meta'];
+    const groups = {};
     Object.keys(CAC_LOGIC).forEach(act => {
-        const opt = new Option(act, act);
-        actionSelect.add(opt);
+        const cat = ACTION_CATEGORIES[act] || 'meta';
+        if (!groups[cat]) groups[cat] = [];
+        groups[cat].push(act);
+    });
+    groupOrder.forEach(cat => {
+        if (!groups[cat] || groups[cat].length === 0) return;
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = groupLabels[cat] || cat;
+        groups[cat].forEach(act => {
+            optgroup.appendChild(new Option(act, act));
+        });
+        actionSelect.appendChild(optgroup);
     });
 
     const updateOutcomes = () => {

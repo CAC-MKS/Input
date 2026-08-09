@@ -53,6 +53,7 @@ export const CAC_LOGIC = {
         "Unsuccessful": ["Hand Ball", "Without Possession", "Own Goal"]
     },
     "Pressure": {
+        "Successful": ["With Possession", "Without Possession"],
         "Foul": ["No Card"]
     },
     "Through Ball": {
