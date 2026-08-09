@@ -13,6 +13,7 @@ export function TaggerView() {
 
             <header class="tagger-header" style="display: flex; justify-content: space-between; align-items: center; padding: 0 8px; flex-wrap: wrap; gap: 8px;">
                 <div>
+                    <div id="analyst-activity-bar" style="display: none; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px;"></div>
                     <h2 id="match-title" style="margin-bottom: 4px;">Loading Match...</h2>
                     <div id="match-subtitle" style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase;">Match ID: ...</div>
                 </div>
@@ -337,6 +338,7 @@ let activeLineup = [];
 let localEvents = [];
 let undoStack = []; // For undo functionality
 let lockHeartbeatInterval = null;
+let analystActivityInterval = null;
 let autoSyncPending = false;
 let _lastLogTime = 0; // Debounce for Enter key
 let _toastTimeout = null; // Toast dismissal timer
@@ -505,6 +507,78 @@ async function checkMatchLock(matchId) {
     } catch (e) {
         return null;
     }
+}
+
+// ──────────────────────────────────────────
+// ANALYST ACTIVITY — who's tagged what on this match, so a team of several
+// analysts working the same match at once can see each other's coverage
+// and avoid re-tagging the same passage of play.
+// ──────────────────────────────────────────
+function stopAnalystActivityPolling() {
+    if (analystActivityInterval) {
+        clearInterval(analystActivityInterval);
+        analystActivityInterval = null;
+    }
+}
+
+function startAnalystActivityPolling(matchId) {
+    stopAnalystActivityPolling();
+    loadAnalystActivity(matchId);
+    // Only reflects SYNCED events — an analyst's own in-progress tags only
+    // become visible to teammates once they sync, so this isn't instant,
+    // but a poll every 30s is close enough for "who's covering what."
+    analystActivityInterval = setInterval(() => loadAnalystActivity(matchId), 30 * 1000);
+}
+
+async function loadAnalystActivity(matchId) {
+    const bar = document.getElementById('analyst-activity-bar');
+    if (!bar) return;
+
+    const { data, error } = await supabase
+        .from('match_events')
+        .select('analyst_id, match_time_seconds, analyst:profiles!analyst_id(username)')
+        .eq('match_id', matchId);
+
+    if (error || !data) return;
+
+    const byAnalyst = new Map();
+    for (const row of data) {
+        const key = row.analyst_id;
+        const name = row.analyst?.username || 'Unknown';
+        if (!byAnalyst.has(key)) byAnalyst.set(key, { name, count: 0, maxTime: 0 });
+        const entry = byAnalyst.get(key);
+        entry.count += 1;
+        entry.maxTime = Math.max(entry.maxTime, row.match_time_seconds ?? 0);
+    }
+
+    if (byAnalyst.size === 0) {
+        bar.style.display = 'none';
+        return;
+    }
+
+    const fmtTime = (s) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
+    const meId = _cachedUser?.id;
+    const pills = [...byAnalyst.entries()]
+        .sort((a, b) => b[1].count - a[1].count)
+        .map(([id, { name, count, maxTime }]) => {
+            const isMe = id === meId;
+            return `
+                <span title="${count} events tagged, latest at ${fmtTime(maxTime)}" style="
+                    display: inline-flex; align-items: center; gap: 5px;
+                    padding: 3px 9px; border-radius: 999px; font-size: 0.7rem; font-weight: 600;
+                    border: 1px solid ${isMe ? 'var(--accent)' : 'var(--border)'};
+                    background: ${isMe ? 'var(--accent-glow)' : 'var(--bg-card)'};
+                    color: var(--text-main);
+                ">
+                    <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--success); flex-shrink: 0;"></span>
+                    ${name}${isMe ? ' (you)' : ''} · ${count} · up to ${fmtTime(maxTime)}
+                </span>
+            `;
+        })
+        .join('');
+
+    bar.innerHTML = pills;
+    bar.style.display = 'flex';
 }
 
 // ──────────────────────────────────────────
@@ -810,9 +884,12 @@ export async function initTagger() {
     const releaseLockOnLeave = () => {
         releaseMatchLock(matchId);
         stopLockHeartbeat();
+        stopAnalystActivityPolling();
     };
     window.addEventListener('hashchange', releaseLockOnLeave, { once: true });
     window.addEventListener('beforeunload', releaseLockOnLeave);
+
+    startAnalystActivityPolling(matchId);
 
     // Restore any unsynced events from localStorage (survives page reload)
     if (localEvents.length === 0) {
@@ -2111,6 +2188,7 @@ async function syncEvents() {
         saveEventsToStorage();
         renderStaging();
         updateProgress();
+        if (activeMatch) loadAnalystActivity(activeMatch.match_id);
         btn.innerText = 'Synced!';
         if (syncStatus) syncStatus.textContent = `${syncedEvents.length} events synced`;
         setTimeout(() => {
