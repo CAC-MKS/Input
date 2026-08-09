@@ -10,8 +10,8 @@
 --
 --  After running this file:
 --    1. Create your own login: Dashboard → Authentication → Add User.
---    2. Run the two `insert`/`update` statements at the very bottom of this
---       file (Section 9) to make yourself super_admin.
+--    2. Run the `insert` statement at the very bottom of this file
+--       (Section 8) to make yourself super_admin.
 --    3. Log into CAC-input with that account → Admin Portal → Analysts tab
 --       to create accounts for the other analysts (this app creates their
 --       `profiles` row automatically, you don't need to touch SQL for them).
@@ -20,6 +20,38 @@
 --       a confirmation link they may never receive, since CAC-input creates
 --       accounts on their behalf rather than having them self-register).
 -- ============================================================================
+
+
+-- ============================================================================
+-- SECTION 0 — CLEAN SLATE
+-- Makes this script safely re-runnable on a project where a previous,
+-- partial run failed partway through (safe here since this is a brand-new
+-- project with no real data yet).
+-- ============================================================================
+
+drop table if exists public.action_flow_rules cascade;
+drop table if exists public.match_notes cascade;
+drop table if exists public.match_assignments cascade;
+drop table if exists public.processed_match_events cascade;
+drop table if exists public.match_events cascade;
+drop table if exists public.lineups cascade;
+drop table if exists public.tournament_academies cascade;
+drop table if exists public.matches cascade;
+drop table if exists public.players cascade;
+drop table if exists public.teams cascade;
+drop table if exists public.profiles cascade;
+drop table if exists public.tournaments cascade;
+drop table if exists public.academies cascade;
+
+drop function if exists public.is_super_admin() cascade;
+drop function if exists public.current_academy_id() cascade;
+drop function if exists public.matches_set_academy_id() cascade;
+drop function if exists public.merge_teams(uuid, uuid) cascade;
+drop function if exists public.merge_players(uuid, uuid) cascade;
+drop function if exists public.release_stale_locks() cascade;
+drop function if exists public.acquire_match_lock(uuid, uuid) cascade;
+drop function if exists public.refresh_match_lock(uuid, uuid) cascade;
+drop function if exists public.release_match_lock(uuid, uuid) cascade;
 
 
 -- ============================================================================
@@ -48,8 +80,14 @@ create table public.tournaments (
   end_date date,
   created_at timestamp with time zone default now(),
   created_by uuid,
+  -- Not in the original pasted schema dump, but required by the
+  -- tournaments_select/insert/update RLS policies below (which reference
+  -- academy_id) — production has this column even though no migration file
+  -- in this repo shows it being added, so it's included here explicitly.
+  academy_id uuid,
   constraint tournaments_pkey primary key (tournament_id),
-  constraint tournaments_created_by_fkey foreign key (created_by) references auth.users(id)
+  constraint tournaments_created_by_fkey foreign key (created_by) references auth.users(id),
+  constraint tournaments_academy_id_fkey foreign key (academy_id) references public.academies(academy_id)
 );
 
 create table public.profiles (
@@ -639,53 +677,51 @@ ON CONFLICT (current_action, current_outcome, current_type) DO NOTHING;
 
 
 -- ============================================================================
--- SECTION 6 — PUBLIC READ ADDENDUM
+-- SECTION 6 — SEED: the one MKS Podlasie academy + team
+-- One statement, chained via a CTE so there's no manual copy-paste of the
+-- academy_id between statements. Copy BOTH returned UUIDs from the result —
+-- academy_id is VITE_ACADEMY_ID (CAC-player-report), team_id is
+-- NEXT_PUBLIC_MKS_TEAM_ID (CAC-Match-Report).
+-- ============================================================================
+
+with new_academy as (
+  insert into public.academies (name, slug) values
+    ('MKS Podlasie Sokołów Podlaski', 'mks-podlasie-sokolow-podlaski')
+  returning academy_id
+)
+insert into public.teams (team_name, academy_id, is_home)
+select 'MKS Podlasie Sokołów Podlaski', academy_id, true from new_academy
+returning academy_id, team_id;
+
+
+-- ============================================================================
+-- SECTION 7 — PUBLIC READ ADDENDUM
 -- Lets the two public report sites read MKS Podlasie's data with just the
--- anon key, no login required. Scoped to ONE literal academy_id so that if
--- Calcio AC ever onboards a second club into this same project, that club's
--- data stays invisible to the public internet. `match_notes` is deliberately
--- NOT exposed here — internal scouting notes stay analyst-only.
---
--- Run Section 7 first to get the real academy_id, then come back and replace
--- '<MKS_ACADEMY_ID>' below with it before running this section.
+-- anon key, no login required. Scoped to ONE literal academy_id (looked up
+-- automatically below — no manual UUID copy-paste needed) so that if Calcio
+-- AC ever onboards a second client into this same project, that club's data
+-- stays invisible to the public internet. `match_notes` is deliberately NOT
+-- exposed here — internal scouting notes stay analyst-only.
 -- ============================================================================
 
--- create policy anon_read_teams on public.teams for select to anon
---   using (academy_id = '<MKS_ACADEMY_ID>');
---
--- create policy anon_read_players on public.players for select to anon
---   using (exists (select 1 from public.teams t
---     where t.team_id = players.team_id and t.academy_id = '<MKS_ACADEMY_ID>'));
---
--- create policy anon_read_matches on public.matches for select to anon
---   using (academy_id = '<MKS_ACADEMY_ID>');
---
--- create policy anon_read_lineups on public.lineups for select to anon
---   using (exists (select 1 from public.matches m
---     where m.match_id = lineups.match_id and m.academy_id = '<MKS_ACADEMY_ID>'));
---
--- create policy anon_read_match_events on public.match_events for select to anon
---   using (exists (select 1 from public.matches m
---     where m.match_id = match_events.match_id and m.academy_id = '<MKS_ACADEMY_ID>'));
---
--- create policy anon_read_pme on public.processed_match_events for select to anon
---   using (exists (select 1 from public.matches m
---     where m.match_id = processed_match_events.match_id and m.academy_id = '<MKS_ACADEMY_ID>'));
+do $$
+declare
+  v_academy_id uuid;
+begin
+  select academy_id into v_academy_id from public.academies
+   where slug = 'mks-podlasie-sokolow-podlaski';
 
+  if v_academy_id is null then
+    raise exception 'Run Section 6 first -- no MKS Podlasie academy row found.';
+  end if;
 
--- ============================================================================
--- SECTION 7 — SEED: the one MKS Podlasie academy + team
--- Run this, note the two returned UUIDs, then go back and fill them into
--- Section 6 above (as the academy_id) before running Section 6.
--- ============================================================================
-
-insert into public.academies (name, slug) values
-  ('MKS Podlasie Sokołów Podlaski', 'mks-podlasie-sokolow-podlaski')
-  returning academy_id;   -- <- note this UUID: it's VITE_ACADEMY_ID for CAC-player-report
-
-insert into public.teams (team_name, academy_id, is_home) values
-  ('MKS Podlasie Sokołów Podlaski', '<PASTE_ACADEMY_ID_HERE>', true)
-  returning team_id;      -- <- note this UUID: it's NEXT_PUBLIC_MKS_TEAM_ID for CAC-Match-Report
+  execute format('create policy anon_read_teams on public.teams for select to anon using (academy_id = %L)', v_academy_id);
+  execute format('create policy anon_read_players on public.players for select to anon using (exists (select 1 from public.teams t where t.team_id = players.team_id and t.academy_id = %L))', v_academy_id);
+  execute format('create policy anon_read_matches on public.matches for select to anon using (academy_id = %L)', v_academy_id);
+  execute format('create policy anon_read_lineups on public.lineups for select to anon using (exists (select 1 from public.matches m where m.match_id = lineups.match_id and m.academy_id = %L))', v_academy_id);
+  execute format('create policy anon_read_match_events on public.match_events for select to anon using (exists (select 1 from public.matches m where m.match_id = match_events.match_id and m.academy_id = %L))', v_academy_id);
+  execute format('create policy anon_read_pme on public.processed_match_events for select to anon using (exists (select 1 from public.matches m where m.match_id = processed_match_events.match_id and m.academy_id = %L))', v_academy_id);
+end $$;
 
 
 -- ============================================================================
