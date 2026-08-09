@@ -1669,10 +1669,12 @@ function renderStaging() {
         if (idx < 0 || idx >= syncedEvents.length) return;
         const ev = syncedEvents[idx];
         if (!confirm('Delete this synced event? This cannot be undone.')) return;
-        if (ev.event_id) {
-            const { error } = await supabase.from('match_events').delete().eq('event_id', ev.event_id);
-            if (error) { alert('Delete failed: ' + error.message); return; }
-        }
+        // match_event_id is the real primary key column — without it the
+        // delete would silently no-op against the DB while still removing
+        // the row from view, so it'd reappear on the next reload.
+        if (!ev.match_event_id) { alert('Delete failed: missing match_event_id.'); return; }
+        const { error } = await supabase.from('match_events').delete().eq('match_event_id', ev.match_event_id);
+        if (error) { alert('Delete failed: ' + error.message); return; }
         syncedEvents.splice(idx, 1);
         renderStaging();
         updateProgress();
@@ -1705,11 +1707,18 @@ function renderStaging() {
                 Object.assign(ev, updates);
                 if (src === 'local') {
                     saveEventsToStorage();
-                } else if (src === 'synced' && ev.event_id) {
-                    // Strip UI-only keys before sending to Supabase
-                    const { _ui_player, _ui_reaction_player, player, reaction, ...dbFields } = updates;
-                    const { error } = await supabase.from('match_events').update(dbFields).eq('event_id', ev.event_id);
-                    if (error) { alert('Save failed: ' + error.message); }
+                } else if (src === 'synced') {
+                    // match_event_id is the real primary key column — using
+                    // the wrong name here meant this update never ran, so
+                    // synced-row edits looked saved in the UI but silently
+                    // reverted on the next reload.
+                    if (!ev.match_event_id) {
+                        alert('Save failed: missing match_event_id.');
+                    } else {
+                        const { _ui_player, _ui_reaction_player, player, reaction, ...dbFields } = updates;
+                        const { error } = await supabase.from('match_events').update(dbFields).eq('match_event_id', ev.match_event_id);
+                        if (error) alert('Save failed: ' + error.message);
+                    }
                 }
                 renderStaging();
                 updateProgress();
@@ -2012,7 +2021,16 @@ async function loadSyncedEvents() {
                 .order('match_time_seconds', { ascending: true })
                 .range(rangeStart, rangeStart + PAGE_SIZE - 1);
 
-            if (error) { console.error('Fallback synced events query also failed:', error); return; }
+            if (error) {
+                // Surface this instead of leaving the log silently blank —
+                // a failed fetch looked identical to "nothing tagged yet."
+                console.error('Fallback synced events query also failed:', error);
+                const body = document.getElementById('staging-body');
+                if (body) {
+                    body.innerHTML = `<tr><td colspan="10" style="padding: 12px; color: var(--danger); text-align: center;">Could not load previously tagged events: ${error.message}</td></tr>`;
+                }
+                return;
+            }
             allData = allData.concat(data || []);
             if (!data || data.length < PAGE_SIZE) break;
             rangeStart += PAGE_SIZE;
