@@ -113,6 +113,12 @@ export class PitchCanvas {
         ctx.strokeRect(sx(0), sy(p.maxY / 2 + penaltyHalfDepth), sx(penaltyDist) - sx(0), sy(p.maxY / 2 - penaltyHalfDepth) - sy(p.maxY / 2 + penaltyHalfDepth));
         ctx.strokeRect(sx(p.maxX - penaltyDist), sy(p.maxY / 2 + penaltyHalfDepth), sx(p.maxX) - sx(p.maxX - penaltyDist), sy(p.maxY / 2 - penaltyHalfDepth) - sy(p.maxY / 2 + penaltyHalfDepth));
 
+        // Goal Areas (6-yard box)
+        const goalAreaDepth = p.type === 'standard' ? 5.5 : 4;
+        const goalAreaHalfWidth = p.type === 'standard' ? 9.16 : 4;
+        ctx.strokeRect(sx(0), sy(p.maxY / 2 + goalAreaHalfWidth), sx(goalAreaDepth) - sx(0), sy(p.maxY / 2 - goalAreaHalfWidth) - sy(p.maxY / 2 + goalAreaHalfWidth));
+        ctx.strokeRect(sx(p.maxX - goalAreaDepth), sy(p.maxY / 2 + goalAreaHalfWidth), sx(p.maxX) - sx(p.maxX - goalAreaDepth), sy(p.maxY / 2 - goalAreaHalfWidth) - sy(p.maxY / 2 + goalAreaHalfWidth));
+
         // Penalty spots
         ctx.fillStyle = c.spot;
         ctx.beginPath();

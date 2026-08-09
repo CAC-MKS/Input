@@ -786,6 +786,7 @@ export async function initTagger() {
     if (activeMatch && activeMatch.match_id !== matchId) {
         localEvents = [];
         undoStack = [];
+        syncedEvents = [];
     }
 
     activeMatch = match;
@@ -1605,36 +1606,33 @@ function renderStaging() {
         const timeStr = `${Math.floor(e.match_time_seconds / 60)}:${(e.match_time_seconds % 60).toString().padStart(2, '0')}`;
         const playerDisplay = e._ui_player || 'Unknown';
         const reactionDisplay = e._ui_reaction_player || '';
-
-        // Make unsynced rows editable
-        const editableClass = isSynced ? '' : 'editable-cell';
-        const editClick = isSynced ? '' : `data-edit-idx="${idx}"`;
+        const src = isSynced ? 'synced' : 'local';
 
         return `
             <tr style="border-bottom: 1px solid var(--border); ${bgColor}">
-                <td style="padding: 6px; white-space: nowrap;">${timeStr}</td>
-                <td style="padding: 6px; font-weight: 600;">${e.team_direction}</td>
-                <td style="padding: 6px;" class="${editableClass}" ${editClick} data-edit-field="action">
+                <td style="padding: 6px; white-space: nowrap;" class="editable-cell" data-src="${src}" data-edit-idx="${idx}" data-edit-field="match_time_seconds">${timeStr}</td>
+                <td style="padding: 6px; font-weight: 600;" class="editable-cell" data-src="${src}" data-edit-idx="${idx}" data-edit-field="team_direction">${e.team_direction}</td>
+                <td style="padding: 6px;" class="editable-cell" data-src="${src}" data-edit-idx="${idx}" data-edit-field="action">
                     <span style="font-weight:600;">${e.action}</span><br>
                     <span style="color:var(--text-muted);font-size:0.65rem;">${e.outcome}</span>
                 </td>
-                <td style="padding: 6px;" class="${editableClass}" ${editClick} data-edit-field="type">${e.type || '-'}</td>
-                <td style="padding: 6px;" class="${editableClass}" ${editClick} data-edit-field="body_part">${e.body_part || '-'}</td>
-                <td style="padding: 6px;">${e.pressure_on ? 'Y' : 'N'}</td>
-                <td style="padding: 6px; white-space: nowrap;">
+                <td style="padding: 6px;" class="editable-cell" data-src="${src}" data-edit-idx="${idx}" data-edit-field="type">${e.type || '-'}</td>
+                <td style="padding: 6px;" class="editable-cell" data-src="${src}" data-edit-idx="${idx}" data-edit-field="body_part">${e.body_part || '-'}</td>
+                <td style="padding: 6px;" class="editable-cell" data-src="${src}" data-edit-idx="${idx}" data-edit-field="pressure_on">${e.pressure_on ? 'Y' : 'N'}</td>
+                <td style="padding: 6px; white-space: nowrap;" class="editable-cell" data-src="${src}" data-edit-idx="${idx}" data-edit-field="players">
                     ACT: ${playerDisplay}<br>
                     ${reactionDisplay ? '<span style="color:var(--text-muted);font-size:0.65rem;">RCT: '+reactionDisplay+'</span>' : ''}
                 </td>
-                <td style="padding: 6px; font-family: var(--font-mono); font-size: 0.65rem; white-space: nowrap;">
+                <td style="padding: 6px; font-family: var(--font-mono); font-size: 0.65rem; white-space: nowrap;" class="editable-cell" data-src="${src}" data-edit-idx="${idx}" data-edit-field="coords">
                     S: ${e.start_x},${e.start_y}<br>
                     E: ${e.end_x !== null ? e.end_x+','+e.end_y : '-'}${e.end_z !== null ? ' (z:'+e.end_z+')' : ''}
                 </td>
-                <td style="padding: 6px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${e.notes || ''}" class="${editableClass}" ${editClick} data-edit-field="notes">
+                <td style="padding: 6px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${e.notes || ''}" class="editable-cell" data-src="${src}" data-edit-idx="${idx}" data-edit-field="notes">
                     ${e.notes || '-'}
                 </td>
                 <td style="padding: 6px; text-align: center;">
                     ${isSynced
-                        ? '<span style="color: var(--success); font-size: 0.7rem;">OK</span>'
+                        ? `<button onclick="window.deleteSyncedEvent(${idx})" style="background: none; border: none; cursor: pointer; color: var(--danger); font-weight: 700; font-size: 0.7rem;" title="Delete synced event">X</button>`
                         : `<button onclick="window.removeStagedEvent(${idx})" style="background: none; border: none; cursor: pointer; color: var(--danger); font-weight: 700; font-size: 0.8rem;">X</button>`
                     }
                 </td>
@@ -1654,33 +1652,298 @@ function renderStaging() {
         updateProgress();
     };
 
-    // Inline editing for unsynced events
+    window.deleteSyncedEvent = async (idx) => {
+        if (idx < 0 || idx >= syncedEvents.length) return;
+        const ev = syncedEvents[idx];
+        if (!confirm('Delete this synced event? This cannot be undone.')) return;
+        if (ev.event_id) {
+            const { error } = await supabase.from('match_events').delete().eq('event_id', ev.event_id);
+            if (error) { alert('Delete failed: ' + error.message); return; }
+        }
+        syncedEvents.splice(idx, 1);
+        renderStaging();
+        updateProgress();
+    };
+
+    // Inline editing for ALL events (synced + unsynced)
     body.querySelectorAll('[data-edit-idx]').forEach(cell => {
         cell.addEventListener('dblclick', () => {
             const idx = parseInt(cell.dataset.editIdx);
             const field = cell.dataset.editField;
-            if (isNaN(idx) || !field || idx >= localEvents.length) return;
+            const src = cell.dataset.src;
+            const evList = src === 'synced' ? syncedEvents : localEvents;
+            if (isNaN(idx) || !field || idx >= evList.length) return;
+            const ev = evList[idx];
 
-            const currentVal = localEvents[idx][field] || '';
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.value = currentVal;
-            input.className = 'form-input';
-            input.style.cssText = 'padding: 2px 4px; font-size: 0.7rem; width: 100%;';
-            cell.innerHTML = '';
-            cell.appendChild(input);
-            input.focus();
-
-            const save = () => {
-                localEvents[idx][field] = input.value || null;
-                saveEventsToStorage();
+            // Helper to save and re-render
+            const saveEdit = async (updates) => {
+                Object.assign(ev, updates);
+                if (src === 'local') {
+                    saveEventsToStorage();
+                } else if (src === 'synced' && ev.event_id) {
+                    // Strip UI-only keys before sending to Supabase
+                    const { _ui_player, _ui_reaction_player, player, reaction, ...dbFields } = updates;
+                    const { error } = await supabase.from('match_events').update(dbFields).eq('event_id', ev.event_id);
+                    if (error) { alert('Save failed: ' + error.message); }
+                }
                 renderStaging();
+                updateProgress();
             };
-            input.addEventListener('blur', save);
-            input.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') save();
-                if (e.key === 'Escape') renderStaging();
-            });
+
+            // ── Time field ──
+            if (field === 'match_time_seconds') {
+                const mins = Math.floor(ev.match_time_seconds / 60);
+                const secs = ev.match_time_seconds % 60;
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.value = `${mins}:${secs.toString().padStart(2, '0')}`;
+                input.className = 'form-input';
+                input.style.cssText = 'padding: 2px 4px; font-size: 0.7rem; width: 60px;';
+                cell.innerHTML = '';
+                cell.appendChild(input);
+                input.focus();
+                input.select();
+                const save = () => {
+                    const parts = input.value.split(':');
+                    const m = parseInt(parts[0]) || 0;
+                    const s = parseInt(parts[1]) || 0;
+                    saveEdit({ match_time_seconds: m * 60 + s });
+                };
+                input.addEventListener('blur', save);
+                input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') renderStaging(); });
+                return;
+            }
+
+            // ── Direction toggle ──
+            if (field === 'team_direction') {
+                const newDir = ev.team_direction === 'L2R' ? 'R2L' : 'L2R';
+                saveEdit({ team_direction: newDir });
+                return;
+            }
+
+            // ── Pressure toggle ──
+            if (field === 'pressure_on') {
+                saveEdit({ pressure_on: !ev.pressure_on });
+                return;
+            }
+
+            // ── Action + Outcome (combined dropdown) ──
+            if (field === 'action') {
+                const wrapper = document.createElement('div');
+                wrapper.style.cssText = 'display:flex;flex-direction:column;gap:2px;';
+                // Action dropdown
+                const actSel = document.createElement('select');
+                actSel.className = 'form-input';
+                actSel.style.cssText = 'padding:2px 4px;font-size:0.7rem;';
+                Object.keys(CAC_LOGIC).forEach(a => {
+                    const opt = document.createElement('option');
+                    opt.value = a; opt.textContent = a;
+                    if (a === ev.action) opt.selected = true;
+                    actSel.appendChild(opt);
+                });
+                // Outcome dropdown
+                const outSel = document.createElement('select');
+                outSel.className = 'form-input';
+                outSel.style.cssText = 'padding:2px 4px;font-size:0.65rem;margin-top:2px;';
+                const fillOutcomes = (action) => {
+                    outSel.innerHTML = '';
+                    if (CAC_LOGIC[action]) {
+                        Object.keys(CAC_LOGIC[action]).forEach(o => {
+                            const opt = document.createElement('option');
+                            opt.value = o; opt.textContent = o;
+                            if (o === ev.outcome) opt.selected = true;
+                            outSel.appendChild(opt);
+                        });
+                    }
+                };
+                fillOutcomes(ev.action);
+                actSel.addEventListener('change', () => fillOutcomes(actSel.value));
+                wrapper.appendChild(actSel);
+                wrapper.appendChild(outSel);
+                // Save button
+                const saveBtn = document.createElement('button');
+                saveBtn.textContent = '✓';
+                saveBtn.style.cssText = 'padding:2px 6px;font-size:0.7rem;background:var(--success);color:#fff;border:none;border-radius:3px;cursor:pointer;margin-top:2px;';
+                saveBtn.addEventListener('click', () => {
+                    saveEdit({ action: actSel.value, outcome: outSel.value });
+                });
+                wrapper.appendChild(saveBtn);
+                cell.innerHTML = '';
+                cell.appendChild(wrapper);
+                actSel.focus();
+                return;
+            }
+
+            // ── Type dropdown ──
+            if (field === 'type') {
+                const sel = document.createElement('select');
+                sel.className = 'form-input';
+                sel.style.cssText = 'padding:2px 4px;font-size:0.7rem;';
+                const types = (CAC_LOGIC[ev.action] && CAC_LOGIC[ev.action][ev.outcome]) || [];
+                types.forEach(t => {
+                    if (t === 'NA') return;
+                    const opt = document.createElement('option');
+                    opt.value = t; opt.textContent = t;
+                    if (t === ev.type) opt.selected = true;
+                    sel.appendChild(opt);
+                });
+                // Allow clearing
+                const noneOpt = document.createElement('option');
+                noneOpt.value = ''; noneOpt.textContent = '- None -';
+                if (!ev.type) noneOpt.selected = true;
+                sel.prepend(noneOpt);
+                cell.innerHTML = '';
+                cell.appendChild(sel);
+                sel.focus();
+                const save = () => saveEdit({ type: sel.value || null });
+                sel.addEventListener('change', save);
+                sel.addEventListener('blur', save);
+                return;
+            }
+
+            // ── Body part dropdown ──
+            if (field === 'body_part') {
+                const sel = document.createElement('select');
+                sel.className = 'form-input';
+                sel.style.cssText = 'padding:2px 4px;font-size:0.7rem;';
+                ['Right Leg', 'Left Leg', 'Head', 'Other', 'NA'].forEach(bp => {
+                    const opt = document.createElement('option');
+                    opt.value = bp === 'NA' ? '' : bp;
+                    opt.textContent = bp;
+                    if (bp === ev.body_part || (bp === 'NA' && !ev.body_part)) opt.selected = true;
+                    sel.appendChild(opt);
+                });
+                cell.innerHTML = '';
+                cell.appendChild(sel);
+                sel.focus();
+                const save = () => saveEdit({ body_part: sel.value || null });
+                sel.addEventListener('change', save);
+                sel.addEventListener('blur', save);
+                return;
+            }
+
+            // ── Players (action + reaction) ──
+            if (field === 'players') {
+                const wrapper = document.createElement('div');
+                wrapper.style.cssText = 'display:flex;flex-direction:column;gap:2px;';
+                // Action player dropdown
+                const actLabel = document.createElement('span');
+                actLabel.textContent = 'ACT:';
+                actLabel.style.cssText = 'font-size:0.6rem;color:var(--text-muted);';
+                const actSel = document.createElement('select');
+                actSel.className = 'form-input';
+                actSel.style.cssText = 'padding:2px 4px;font-size:0.65rem;';
+                activeLineup.forEach(p => {
+                    const opt = document.createElement('option');
+                    opt.value = p.player_id;
+                    opt.textContent = `#${p.jersey_no} ${p.players.player_name}`;
+                    if (p.player_id === ev.player_id) opt.selected = true;
+                    actSel.appendChild(opt);
+                });
+                // Reaction player dropdown
+                const rctLabel = document.createElement('span');
+                rctLabel.textContent = 'RCT:';
+                rctLabel.style.cssText = 'font-size:0.6rem;color:var(--text-muted);margin-top:2px;';
+                const rctSel = document.createElement('select');
+                rctSel.className = 'form-input';
+                rctSel.style.cssText = 'padding:2px 4px;font-size:0.65rem;';
+                const noneOpt = document.createElement('option');
+                noneOpt.value = ''; noneOpt.textContent = '- None -';
+                if (!ev.reaction_player_id) noneOpt.selected = true;
+                rctSel.appendChild(noneOpt);
+                activeLineup.forEach(p => {
+                    const opt = document.createElement('option');
+                    opt.value = p.player_id;
+                    opt.textContent = `#${p.jersey_no} ${p.players.player_name}`;
+                    if (p.player_id === ev.reaction_player_id) opt.selected = true;
+                    rctSel.appendChild(opt);
+                });
+                const saveBtn = document.createElement('button');
+                saveBtn.textContent = '✓';
+                saveBtn.style.cssText = 'padding:2px 6px;font-size:0.7rem;background:var(--success);color:#fff;border:none;border-radius:3px;cursor:pointer;margin-top:2px;';
+                saveBtn.addEventListener('click', () => {
+                    const actPlayer = activeLineup.find(l => l.player_id === actSel.value);
+                    const rctPlayer = rctSel.value ? activeLineup.find(l => l.player_id === rctSel.value) : null;
+                    saveEdit({
+                        player_id: actSel.value,
+                        reaction_player_id: rctSel.value || null,
+                        _ui_player: actPlayer ? `${actPlayer.players.player_name} (${actPlayer.jersey_no})` : ev._ui_player,
+                        _ui_reaction_player: rctPlayer ? `${rctPlayer.players.player_name} (${rctPlayer.jersey_no})` : null,
+                    });
+                });
+                wrapper.appendChild(actLabel);
+                wrapper.appendChild(actSel);
+                wrapper.appendChild(rctLabel);
+                wrapper.appendChild(rctSel);
+                wrapper.appendChild(saveBtn);
+                cell.innerHTML = '';
+                cell.appendChild(wrapper);
+                actSel.focus();
+                return;
+            }
+
+            // ── Coords (start_x, start_y, end_x, end_y, end_z) ──
+            if (field === 'coords') {
+                const wrapper = document.createElement('div');
+                wrapper.style.cssText = 'display:flex;flex-direction:column;gap:2px;';
+                const sInput = document.createElement('input');
+                sInput.type = 'text';
+                sInput.value = `${ev.start_x},${ev.start_y}`;
+                sInput.placeholder = 'start x,y';
+                sInput.className = 'form-input';
+                sInput.style.cssText = 'padding:2px 4px;font-size:0.65rem;width:80px;';
+                const eInput = document.createElement('input');
+                eInput.type = 'text';
+                eInput.value = ev.end_x !== null ? `${ev.end_x},${ev.end_y}` : '';
+                eInput.placeholder = 'end x,y';
+                eInput.className = 'form-input';
+                eInput.style.cssText = 'padding:2px 4px;font-size:0.65rem;width:80px;margin-top:2px;';
+                const zInput = document.createElement('input');
+                zInput.type = 'text';
+                zInput.value = ev.end_z !== null ? ev.end_z : '';
+                zInput.placeholder = 'end_z';
+                zInput.className = 'form-input';
+                zInput.style.cssText = 'padding:2px 4px;font-size:0.65rem;width:80px;margin-top:2px;';
+                const saveBtn = document.createElement('button');
+                saveBtn.textContent = '✓';
+                saveBtn.style.cssText = 'padding:2px 6px;font-size:0.7rem;background:var(--success);color:#fff;border:none;border-radius:3px;cursor:pointer;margin-top:2px;';
+                saveBtn.addEventListener('click', () => {
+                    const sParts = sInput.value.split(',');
+                    const eParts = eInput.value ? eInput.value.split(',') : [null, null];
+                    saveEdit({
+                        start_x: parseFloat(sParts[0]) || 0,
+                        start_y: parseFloat(sParts[1]) || 0,
+                        end_x: eParts[0] !== null ? (parseFloat(eParts[0]) || null) : null,
+                        end_y: eParts[1] !== null ? (parseFloat(eParts[1]) || null) : null,
+                        end_z: zInput.value ? parseFloat(zInput.value) : null,
+                    });
+                });
+                wrapper.appendChild(sInput);
+                wrapper.appendChild(eInput);
+                wrapper.appendChild(zInput);
+                wrapper.appendChild(saveBtn);
+                cell.innerHTML = '';
+                cell.appendChild(wrapper);
+                sInput.focus();
+                sInput.select();
+                return;
+            }
+
+            // ── Notes (text input) ──
+            if (field === 'notes') {
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.value = ev.notes || '';
+                input.className = 'form-input';
+                input.style.cssText = 'padding: 2px 4px; font-size: 0.7rem; width: 100%;';
+                cell.innerHTML = '';
+                cell.appendChild(input);
+                input.focus();
+                const save = () => saveEdit({ notes: input.value || null });
+                input.addEventListener('blur', save);
+                input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') renderStaging(); });
+                return;
+            }
         });
     });
 }
