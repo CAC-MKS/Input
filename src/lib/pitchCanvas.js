@@ -23,16 +23,21 @@ export class PitchCanvas {
         this.draw();
     }
 
-    // Theme-aware colors
+    // Fixed pitch styling (navy pitch, white lines, red goals, green
+    // centre spot) — independent of the app's light/dark theme toggle,
+    // matching the reference tagging tool's look.
     getColors() {
-        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         return {
-            bg: isDark ? '#0f172a' : '#1e293b',
-            field: isDark ? '#1e3a2f' : '#334155',
-            lines: isDark ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.4)',
-            start: isDark ? '#4ade80' : '#10b981',      // brighter green in dark
-            end: isDark ? '#f87171' : '#ef4444',          // brighter red in dark
-            dashLine: isDark ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.6)',
+            bg: '#16213e',
+            field: '#16213e',
+            lines: 'rgba(255,255,255,0.85)',
+            goal: '#ef4444',
+            spot: '#ffffff',
+            centreSpot: '#22c55e',
+            grid: 'rgba(255,255,255,0.06)',
+            start: '#4ade80',
+            end: '#f87171',
+            dashLine: 'rgba(255,255,255,0.5)',
         };
     }
 
@@ -75,6 +80,17 @@ export class PitchCanvas {
         ctx.fillStyle = c.field;
         ctx.fillRect(sx(0), sy(p.maxY), sx(p.maxX) - sx(0), sy(0) - sy(p.maxY));
 
+        // Subtle dot-grid texture across the pitch
+        ctx.fillStyle = c.grid;
+        const gridStep = p.type === 'standard' ? 5 : 2;
+        for (let gx = gridStep; gx < p.maxX; gx += gridStep) {
+            for (let gy = gridStep; gy < p.maxY; gy += gridStep) {
+                ctx.beginPath();
+                ctx.arc(sx(gx), sy(gy), 1.2, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        }
+
         ctx.strokeStyle = c.lines;
         ctx.lineWidth = 2;
         ctx.strokeRect(sx(0), sy(p.maxY), sx(p.maxX) - sx(0), sy(0) - sy(p.maxY));
@@ -89,14 +105,42 @@ export class PitchCanvas {
         ctx.arc(sx(p.maxX / 2), sy(p.maxY / 2), centerRadius * (this.canvas.width / (p.maxX + 2 * padX)), 0, 2 * Math.PI);
         ctx.stroke();
 
+        // Kick-off spot
+        ctx.fillStyle = c.centreSpot;
+        ctx.beginPath();
+        ctx.arc(sx(p.maxX / 2), sy(p.maxY / 2), 4, 0, 2 * Math.PI);
+        ctx.fill();
+
         // Penalty Areas
-        if (p.type === 'standard') {
-            ctx.strokeRect(sx(0), sy(p.maxY / 2 + 20.16), sx(16.5) - sx(0), sy(p.maxY / 2 - 20.16) - sy(p.maxY / 2 + 20.16));
-            ctx.strokeRect(sx(p.maxX - 16.5), sy(p.maxY / 2 + 20.16), sx(p.maxX) - sx(p.maxX - 16.5), sy(p.maxY / 2 - 20.16) - sy(p.maxY / 2 + 20.16));
-        } else {
-            ctx.strokeRect(sx(0), sy(p.maxY / 2 + 6), sx(6) - sx(0), sy(p.maxY / 2 - 6) - sy(p.maxY / 2 + 6));
-            ctx.strokeRect(sx(p.maxX - 6), sy(p.maxY / 2 + 6), sx(p.maxX) - sx(p.maxX - 6), sy(p.maxY / 2 - 6) - sy(p.maxY / 2 + 6));
-        }
+        const penaltyHalfDepth = p.type === 'standard' ? 20.16 : 6;
+        const penaltyDist = p.type === 'standard' ? 16.5 : 6;
+        const penaltySpotDist = p.type === 'standard' ? 11 : 6;
+        ctx.strokeStyle = c.lines;
+        ctx.strokeRect(sx(0), sy(p.maxY / 2 + penaltyHalfDepth), sx(penaltyDist) - sx(0), sy(p.maxY / 2 - penaltyHalfDepth) - sy(p.maxY / 2 + penaltyHalfDepth));
+        ctx.strokeRect(sx(p.maxX - penaltyDist), sy(p.maxY / 2 + penaltyHalfDepth), sx(p.maxX) - sx(p.maxX - penaltyDist), sy(p.maxY / 2 - penaltyHalfDepth) - sy(p.maxY / 2 + penaltyHalfDepth));
+
+        // Penalty spots
+        ctx.fillStyle = c.spot;
+        ctx.beginPath();
+        ctx.arc(sx(penaltySpotDist), sy(p.maxY / 2), 3, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(sx(p.maxX - penaltySpotDist), sy(p.maxY / 2), 3, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // Goal mouths — small red markers at each end, centred on the goal line
+        const goalHalf = p.goalWidth / 2;
+        ctx.strokeStyle = c.goal;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(sx(0), sy(p.maxY / 2 - goalHalf));
+        ctx.lineTo(sx(0), sy(p.maxY / 2 + goalHalf));
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(sx(p.maxX), sy(p.maxY / 2 - goalHalf));
+        ctx.lineTo(sx(p.maxX), sy(p.maxY / 2 + goalHalf));
+        ctx.stroke();
+        ctx.lineWidth = 2;
 
         // Draw points
         if (this.startPoint) {
